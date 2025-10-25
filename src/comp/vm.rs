@@ -137,12 +137,28 @@ impl VM {
                 OpCode::False => {
                     self.push(value::FALSE);
                 }
-                OpCode::Not => unsafe {
-                    type_check!(self, 0, ValueType::Boolean);
-                    let top_val = self.stack_top.sub(1);
-                    let filling = (*top_val).mut_filling();
-                    filling.boolean = !filling.boolean;
-                },
+                OpCode::Not => {
+                    let item = self.pop();
+                    self.push(Value::new_bool(item.is_falsy()));
+                }
+                OpCode::Equal => {
+                    let rhs = self.pop();
+                    type_check!(self, 0, rhs.type_of());
+                    let lhs = self.pop();
+                    self.push(Value::new_bool(lhs == rhs));
+                }
+                OpCode::Less => {
+                    let rhs = self.pop();
+                    type_check!(self, 0, rhs.type_of());
+                    let lhs = self.pop();
+                    self.push(Value::new_bool(lhs < rhs));
+                }
+                OpCode::Greater => {
+                    let rhs = self.pop();
+                    type_check!(self, 0, rhs.type_of());
+                    let lhs = self.pop();
+                    self.push(Value::new_bool(lhs > rhs));
+                }
             }
         }
         Ok(())

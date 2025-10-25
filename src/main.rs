@@ -4,6 +4,7 @@ use std::process::exit;
 
 mod comp;
 mod compiler;
+mod object;
 mod scanner;
 mod value;
 use bytes::Bytes;

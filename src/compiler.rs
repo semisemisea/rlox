@@ -56,6 +56,30 @@ fn rule_map() -> &'static HashMap<TokenType, ParseRule> {
             TokenType::Negation,
             ParseRule::new(Some(unary), None, Precedence::None),
         );
+        map.insert(
+            TokenType::Equal,
+            ParseRule::new(None, Some(binary), Precedence::Equality),
+        );
+        map.insert(
+            TokenType::Inequal,
+            ParseRule::new(None, Some(binary), Precedence::Equality),
+        );
+        map.insert(
+            TokenType::GreaterThan,
+            ParseRule::new(None, Some(binary), Precedence::Comparison),
+        );
+        map.insert(
+            TokenType::GreaterThanOrEqual,
+            ParseRule::new(None, Some(binary), Precedence::Comparison),
+        );
+        map.insert(
+            TokenType::LessThan,
+            ParseRule::new(None, Some(binary), Precedence::Comparison),
+        );
+        map.insert(
+            TokenType::LessThanOrEqual,
+            ParseRule::new(None, Some(binary), Precedence::Comparison),
+        );
 
         map
     })
@@ -188,6 +212,17 @@ impl<'a> Parser<'a> {
             TokenType::Minus => self.emit_byte(OpCode::Subtract),
             TokenType::Star => self.emit_byte(OpCode::Multiply),
             TokenType::Slash => self.emit_byte(OpCode::Divide),
+            TokenType::Equal => self.emit_byte(OpCode::Equal),
+            TokenType::GreaterThan => self.emit_byte(OpCode::Greater),
+            TokenType::LessThan => self.emit_byte(OpCode::Less),
+            TokenType::GreaterThanOrEqual => {
+                self.emit_byte(OpCode::Less);
+                self.emit_byte(OpCode::Not);
+            }
+            TokenType::LessThanOrEqual => {
+                self.emit_byte(OpCode::Greater);
+                self.emit_byte(OpCode::Not);
+            }
             _ => todo!(),
         }
 

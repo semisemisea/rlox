@@ -19,6 +19,9 @@ pub enum OpCode {
     True,
     False,
     Not,
+    Equal,
+    Less,
+    Greater,
 }
 
 impl From<u8> for OpCode {
@@ -36,6 +39,9 @@ impl From<u8> for OpCode {
             9 => OpCode::True,
             10 => OpCode::False,
             11 => OpCode::Not,
+            12 => OpCode::Equal,
+            13 => OpCode::Less,
+            14 => OpCode::Greater,
             _ => todo!(),
         }
     }
@@ -167,6 +173,15 @@ impl Chunk {
             }
             OpCode::Not => {
                 print!("OP_NOT")
+            }
+            OpCode::Equal => {
+                print!("OP_EQUAL")
+            }
+            OpCode::Less => {
+                print!("OP_LESS")
+            }
+            OpCode::Greater => {
+                print!("OP_GREATER")
             }
         };
         println!();
