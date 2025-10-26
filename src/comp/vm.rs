@@ -1,4 +1,8 @@
+use num_enum::UnsafeFromPrimitive;
+
 use crate::comp::op_code::{Chunk, OpCode};
+use crate::lox_object::lox_string::LoxString;
+use crate::object::LoxObj;
 use crate::value::{self, Value, ValueType};
 
 const STACK_MAX: usize = 2048;
@@ -19,29 +23,34 @@ pub struct VM {
     stack_top: *mut Value,
 }
 
-macro_rules! type_check {
-    ($self:expr, $dist:expr, $($exp_type:expr),+ $(,)?) => {
-        $(
-            if $self.peek($dist).type_of() != $exp_type {
-                return Err(RuntimeError::TypeError {
-                    should_be: $exp_type,
-                    actual: $self.peek($dist).type_of(),
-                });
-            }
-        )+
+unsafe impl Send for VM {}
+unsafe impl Sync for VM {}
+
+macro_rules! type_error {
+    ($expect:expr, $actual:expr) => {
+        return Err(RuntimeError::TypeError {
+            should_be: $expect,
+            actual: $actual,
+        })
+    };
+}
+
+macro_rules! simple_type_check {
+    ($self:expr, $dist:expr, $exp_type:expr) => {
+        if $self.peek($dist).type_of() != $exp_type {
+            type_error!($exp_type, $self.peek($dist).type_of())
+        }
     };
 }
 
 impl VM {
     pub fn new(chunk: Chunk) -> VM {
-        let mut vm = VM {
+        VM {
             chunk,
             ip: std::ptr::null(),
             stack: [Value::default(); STACK_MAX],
             stack_top: std::ptr::null_mut(),
-        };
-        vm.ip = vm.chunk.code_top_ptr();
-        vm
+        }
     }
 
     pub fn init_vm(&mut self) {
@@ -73,7 +82,7 @@ impl VM {
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
             self.chunk.show_one_op_code(&mut self.ip.clone());
-            let op = self.read_byte().into();
+            let op = unsafe { OpCode::unchecked_transmute_from(self.read_byte()) };
             match op {
                 OpCode::Return => {
                     println!("print the stack_top {}", self.pop());
@@ -97,32 +106,41 @@ impl VM {
                     filling.number = -filling.number
                 },
                 OpCode::Add => unsafe {
-                    type_check!(self, 0, ValueType::Number);
-                    type_check!(self, 1, ValueType::Number);
                     let mut rhs = self.pop();
-                    let rhs_filling = rhs.mut_filling();
-                    let lhs_filling = (*self.stack_top.sub(1)).mut_filling();
-                    lhs_filling.number += rhs_filling.number;
+                    if rhs.is_number() {
+                        simple_type_check!(self, 0, ValueType::Number);
+                        let rhs_filling = rhs.mut_filling();
+                        let lhs_filling = (*self.stack_top.sub(1)).mut_filling();
+                        lhs_filling.number += rhs_filling.number;
+                    }
+                    if rhs.is_string() {
+                        let lhs = self.peek(0);
+                        if !lhs.is_string() {
+                            type_error!(ValueType::LoxObject, lhs.type_of());
+                        }
+                        let mut lhs = (lhs.as_mut_object() as *mut LoxString).read();
+                        lhs.chars += &rhs.as_obj_string().chars;
+                    }
                 },
                 OpCode::Subtract => unsafe {
-                    type_check!(self, 0, ValueType::Number);
-                    type_check!(self, 1, ValueType::Number);
+                    simple_type_check!(self, 0, ValueType::Number);
+                    simple_type_check!(self, 1, ValueType::Number);
                     let mut rhs = self.pop();
                     let rhs_filling = rhs.mut_filling();
                     let lhs_filling = (*self.stack_top.sub(1)).mut_filling();
                     lhs_filling.number -= rhs_filling.number;
                 },
                 OpCode::Multiply => unsafe {
-                    type_check!(self, 0, ValueType::Number);
-                    type_check!(self, 1, ValueType::Number);
+                    simple_type_check!(self, 0, ValueType::Number);
+                    simple_type_check!(self, 1, ValueType::Number);
                     let mut rhs = self.pop();
                     let rhs_filling = rhs.mut_filling();
                     let lhs_filling = (*self.stack_top.sub(1)).mut_filling();
                     lhs_filling.number *= rhs_filling.number;
                 },
                 OpCode::Divide => unsafe {
-                    type_check!(self, 0, ValueType::Number);
-                    type_check!(self, 1, ValueType::Number);
+                    simple_type_check!(self, 0, ValueType::Number);
+                    simple_type_check!(self, 1, ValueType::Number);
                     let mut rhs = self.pop();
                     let rhs_filling = rhs.mut_filling();
                     let lhs_filling = (*self.stack_top.sub(1)).mut_filling();
@@ -143,19 +161,19 @@ impl VM {
                 }
                 OpCode::Equal => {
                     let rhs = self.pop();
-                    type_check!(self, 0, rhs.type_of());
+                    simple_type_check!(self, 0, rhs.type_of());
                     let lhs = self.pop();
                     self.push(Value::new_bool(lhs == rhs));
                 }
                 OpCode::Less => {
                     let rhs = self.pop();
-                    type_check!(self, 0, rhs.type_of());
+                    simple_type_check!(self, 0, rhs.type_of());
                     let lhs = self.pop();
                     self.push(Value::new_bool(lhs < rhs));
                 }
                 OpCode::Greater => {
                     let rhs = self.pop();
-                    type_check!(self, 0, rhs.type_of());
+                    simple_type_check!(self, 0, rhs.type_of());
                     let lhs = self.pop();
                     self.push(Value::new_bool(lhs > rhs));
                 }

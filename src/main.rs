@@ -1,20 +1,18 @@
+use crate::comp::op_code::Chunk;
+use crate::comp::vm::VM;
+use crate::compiler::compile;
+use bytes::Bytes;
 use std::env;
 use std::fs;
 use std::process::exit;
 
 mod comp;
 mod compiler;
+mod gc;
+mod lox_object;
 mod object;
 mod scanner;
 mod value;
-use bytes::Bytes;
-use comp::op_code::*;
-
-use crate::comp::vm::RuntimeError;
-use crate::comp::vm::VM;
-use crate::compiler::Parser;
-use crate::compiler::compile;
-use crate::scanner::Scanner;
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();
@@ -39,6 +37,7 @@ fn run_file(file_path: &String) {
     let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let file_content = Bytes::from_owner(mmap);
     let chunk = compile(&file_content).unwrap();
+    thread_local! {}
     let mut vm = VM::new(chunk);
     vm.init_vm();
     vm.run().unwrap();

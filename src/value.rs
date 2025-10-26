@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 
-use crate::object::LoxObj;
+use crate::gc::OBJ_HEAD_PTR;
+use crate::lox_object::lox_string::LoxString;
+use crate::object::{LoxObj, LoxObjType};
 
 pub const NIL: Value = Value {
     v_type: ValueType::Nil,
@@ -58,6 +60,11 @@ pub struct Value {
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         if self.v_type == other.v_type {
+            if self.v_type == ValueType::LoxObject {
+                let lhs = unsafe { self.v_fill.obj_ptr.as_ref().unwrap() };
+                let rhs = unsafe { other.v_fill.obj_ptr.as_ref().unwrap() };
+                return lhs == rhs;
+            }
             let lhs = unsafe { std::mem::transmute::<Fillings, u64>(self.v_fill) };
             let rhs = unsafe { std::mem::transmute::<Fillings, u64>(other.v_fill) };
             lhs == rhs
@@ -87,7 +94,16 @@ impl std::fmt::Display for Value {
             ValueType::Nil => write!(f, "nil"),
             ValueType::Boolean => write!(f, "{}", unsafe { self.v_fill.boolean }),
             ValueType::Number => write!(f, "{}", unsafe { self.v_fill.number }),
-            ValueType::LoxObject => todo!(),
+            ValueType::LoxObject => {
+                let obj_ptr = unsafe { self.v_fill.obj_ptr };
+                let obj_type = unsafe { obj_ptr.as_ref().unwrap().obj_type };
+                match obj_type {
+                    LoxObjType::String => {
+                        let casted_ptr = obj_ptr as *mut LoxString;
+                        write!(f, "\"{}\"", unsafe { &casted_ptr.as_ref().unwrap().chars })
+                    }
+                }
+            }
         }
     }
 }
@@ -116,13 +132,20 @@ impl Value {
         NIL
     }
 
-    pub fn new_obj<T: Into<*mut LoxObj>>(obj_ptr: T) -> Value {
+    fn new_obj(obj_ptr: *mut LoxObj) -> Value {
+        let l_obj = obj_ptr;
+        OBJ_HEAD_PTR.with_borrow_mut(|vm_obj_ptr_head| {
+            unsafe { l_obj.as_mut().unwrap().next = *vm_obj_ptr_head }
+            *vm_obj_ptr_head = l_obj as *mut LoxObj;
+        });
         Value {
             v_type: ValueType::LoxObject,
-            v_fill: Fillings {
-                obj_ptr: obj_ptr.into(),
-            },
+            v_fill: Fillings { obj_ptr: l_obj },
         }
+    }
+
+    pub fn new_string<T: Into<LoxString>>(item: T) -> Value {
+        Value::new_obj(Box::into_raw(Box::new(item.into())) as *mut LoxObj)
     }
 
     #[inline(always)]
@@ -150,6 +173,15 @@ impl Value {
         self.type_of() == ValueType::LoxObject
     }
 
+    pub fn match_obj_type(&self, obj_type: LoxObjType) -> bool {
+        self.is_object() && unsafe { self.as_object().as_ref().unwrap().obj_type == obj_type }
+    }
+
+    pub fn is_string(&self) -> bool {
+        self.is_object()
+            && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::String
+    }
+
     pub fn as_bool(&self) -> bool {
         debug_assert!(self.is_bool());
         unsafe { self.v_fill.boolean }
@@ -168,6 +200,21 @@ impl Value {
     pub fn as_mut_object(&self) -> *mut LoxObj {
         debug_assert!(self.is_object());
         unsafe { self.v_fill.obj_ptr }
+    }
+
+    pub fn as_obj_string(&self) -> &LoxString {
+        debug_assert!(self.is_string());
+        unsafe { (self.as_object() as *const LoxString).as_ref().unwrap() }
+    }
+
+    pub fn as_mut_rust_string(&mut self) -> &mut String {
+        debug_assert!(self.is_string());
+        unsafe {
+            &mut (self.as_mut_object() as *mut LoxString)
+                .as_mut()
+                .unwrap()
+                .chars
+        }
     }
 
     pub fn is_falsy(&self) -> bool {

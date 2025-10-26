@@ -1,11 +1,11 @@
 use crate::value::Value;
-use num_enum::IntoPrimitive;
+use num_enum::{IntoPrimitive, UnsafeFromPrimitive};
 
 ///Grammar:
 ///
 ///
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, IntoPrimitive)]
+#[derive(Debug, Clone, Copy, IntoPrimitive, UnsafeFromPrimitive)]
 pub enum OpCode {
     Return = 0,
     Constant,
@@ -24,28 +24,28 @@ pub enum OpCode {
     Greater,
 }
 
-impl From<u8> for OpCode {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => OpCode::Return,
-            1 => OpCode::Constant,
-            2 => OpCode::ConstantLong,
-            3 => OpCode::Negate,
-            4 => OpCode::Add,
-            5 => OpCode::Subtract,
-            6 => OpCode::Multiply,
-            7 => OpCode::Divide,
-            8 => OpCode::Nil,
-            9 => OpCode::True,
-            10 => OpCode::False,
-            11 => OpCode::Not,
-            12 => OpCode::Equal,
-            13 => OpCode::Less,
-            14 => OpCode::Greater,
-            _ => todo!(),
-        }
-    }
-}
+// impl From<u8> for OpCode {
+//     fn from(value: u8) -> Self {
+//         match value {
+//             0 => OpCode::Return,
+//             1 => OpCode::Constant,
+//             2 => OpCode::ConstantLong,
+//             3 => OpCode::Negate,
+//             4 => OpCode::Add,
+//             5 => OpCode::Subtract,
+//             6 => OpCode::Multiply,
+//             7 => OpCode::Divide,
+//             8 => OpCode::Nil,
+//             9 => OpCode::True,
+//             10 => OpCode::False,
+//             11 => OpCode::Not,
+//             12 => OpCode::Equal,
+//             13 => OpCode::Less,
+//             14 => OpCode::Greater,
+//             _ => todo!(),
+//         }
+//     }
+// }
 
 #[derive(Debug, Default)]
 pub struct Chunk {
@@ -121,7 +121,7 @@ impl Chunk {
 
     pub fn show_one_op_code(&self, ip: &mut *const u8) {
         let op = unsafe { **ip };
-        match op.into() {
+        match unsafe { OpCode::unchecked_transmute_from(op) } {
             OpCode::Return => {
                 print!("OP_RETURN");
             }
@@ -132,7 +132,7 @@ impl Chunk {
                 let idx = unsafe { **ip };
                 print!("{idx:>4}");
                 print!("    ");
-                print!("{}", self.constants[idx as usize].as_number());
+                print!("{}", self.constants[idx as usize]);
             }
             OpCode::ConstantLong => {
                 print!("OP_CONSTANT_LONG");

@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-    sync::OnceLock,
-};
+use std::{collections::HashMap, ops::Range, sync::OnceLock};
 
 use bytes::Bytes;
 use memchr::memchr;
@@ -92,17 +88,17 @@ impl<'byte> Scanner<'byte> {
         }
     }
 
-    // pub fn scan(&mut self) -> Result<Vec<Token>, TokenError> {
-    //     let mut tokens = Vec::new();
-    //     loop {
-    //         let next_token = self.scan_token()?;
-    //         if matches!(next_token.token_type, TokenType::Eof) {
-    //             break;
-    //         }
-    //         tokens.push(next_token);
-    //     }
-    //     Ok(tokens)
-    // }
+    pub fn scan_all(&mut self) -> Result<Vec<Token>, TokenError> {
+        let mut tokens = Vec::new();
+        loop {
+            let next_token = self.scan_token()?;
+            if matches!(next_token.token_type, TokenType::Eof) {
+                break;
+            }
+            tokens.push(next_token);
+        }
+        Ok(tokens)
+    }
 
     pub fn scan_token(&mut self) -> Result<Token, TokenError> {
         self.skip_whitespace();
@@ -151,7 +147,8 @@ impl<'byte> Scanner<'byte> {
                 }
             }
             b'\"' => {
-                let Some(terminator) = memchr(b'\"', &self.contents[self.curr..]) else {
+                self.prev += 1;
+                let Some(mut terminator) = memchr(b'\"', &self.contents[self.curr..]) else {
                     return Err(TokenError::UnterminatedString);
                 };
                 loop {
@@ -159,12 +156,17 @@ impl<'byte> Scanner<'byte> {
                         break;
                     };
                     if eol_pos < terminator {
-                        self.curr = eol_pos + 1;
+                        terminator -= eol_pos + 1 - self.curr;
+                        self.curr += eol_pos + 1;
                         self.line += 1;
+                    } else {
+                        self.curr += terminator;
+                        break;
                     }
                 }
-                self.curr = terminator;
-                Token::new(self, TokenType::StringLiteral)
+                let ret = Token::new(self, TokenType::StringLiteral);
+                self.curr += 1;
+                ret
             }
             b'0'..=b'9' => {
                 while self.peek().is_ascii_digit() {

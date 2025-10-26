@@ -80,6 +80,10 @@ fn rule_map() -> &'static HashMap<TokenType, ParseRule> {
             TokenType::LessThanOrEqual,
             ParseRule::new(None, Some(binary), Precedence::Comparison),
         );
+        map.insert(
+            TokenType::StringLiteral,
+            ParseRule::new(Some(string), None, Precedence::None),
+        );
 
         map
     })
@@ -103,6 +107,10 @@ fn grouping(parser: &mut Parser) -> ParseResult {
 
 fn literal(parser: &mut Parser) -> ParseResult {
     parser.literal()
+}
+
+fn string(parser: &mut Parser) -> ParseResult {
+    parser.string()
 }
 
 #[derive(Debug)]
@@ -226,6 +234,13 @@ impl<'a> Parser<'a> {
             _ => todo!(),
         }
 
+        Ok(())
+    }
+
+    fn string(&mut self) -> ParseResult {
+        let str = self.scanner.make_str(self.prev).to_owned();
+        eprintln!("string result:{str}");
+        self.emit_constant(Value::new_string(str))?;
         Ok(())
     }
 
