@@ -225,6 +225,14 @@ impl VM {
                     };
                     *val = item;
                 }
+                OpCode::SetLocal => {
+                    let slot = self.read_byte();
+                    self.push(self.stack[slot as usize]);
+                }
+                OpCode::GetLocal => {
+                    let slot = self.read_byte();
+                    self.stack[slot as usize] = self.peek(0);
+                }
             }
         }
         Ok(())

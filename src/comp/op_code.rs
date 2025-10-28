@@ -27,6 +27,8 @@ pub enum OpCode {
     DefGlob,
     GetGlob,
     SetGlob,
+    GetLocal,
+    SetLocal,
 }
 
 #[derive(Debug, Default)]
@@ -179,6 +181,12 @@ impl Chunk {
             }
             OpCode::SetGlob => {
                 print!("OP_SET_GLOBAL")
+            }
+            OpCode::GetLocal => {
+                print!("OP_GET_LOCAL")
+            }
+            OpCode::SetLocal => {
+                print!("OP_SET_LOCAL")
             }
         };
         println!();

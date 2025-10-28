@@ -4,7 +4,7 @@ use crate::{
     value::Value,
 };
 use bytes::Bytes;
-use std::{collections::HashMap, sync::OnceLock};
+use std::{cell::RefCell, collections::HashMap, sync::OnceLock, thread::scope};
 
 static DEFAULT_RULE: ParseRule = ParseRule {
     prefix: None,
@@ -127,18 +127,24 @@ pub struct Parser<'a> {
     curr: Token,
     chunk: &'a mut Chunk,
     scanner: Scanner<'a>,
+    compiler: &'a mut Compiler,
 }
 
 type ParseResult = Result<(), CompilationError>;
 type ParseFn = for<'a, 'b> fn(&'b mut Parser<'a>, bool) -> ParseResult;
 
 impl<'a> Parser<'a> {
-    pub fn new(chunk: &'a mut Chunk, scanner: Scanner<'a>) -> Parser<'a> {
+    pub fn new(
+        chunk: &'a mut Chunk,
+        scanner: Scanner<'a>,
+        compiler: &'a mut Compiler,
+    ) -> Parser<'a> {
         Parser {
             prev: Token::placeholder(),
             curr: Token::placeholder(),
             chunk,
             scanner,
+            compiler,
         }
     }
 
@@ -198,6 +204,10 @@ impl<'a> Parser<'a> {
         } else {
             Err(CompilationError::NotWantedToken)
         }
+    }
+
+    fn check(&self, token_type: TokenType) -> bool {
+        self.curr.token_type == token_type
     }
 
     // NOTE: ('inside') Parenthesis branch.
@@ -306,13 +316,14 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) -> ParseResult {
         if self.match_and_consume(TokenType::Print).is_ok() {
             self.print_statement()
+        } else if self.match_and_consume(TokenType::LBrace).is_ok() {
+            self.new_scope();
+            self.block()?;
+            self.del_scope();
+            Ok(())
         } else {
             self.expression_statement()
         }
-        // match self.curr.token_type {
-        //     TokenType::Print => self.print_statement(),
-        //     _ => todo!("{:?}", self.curr),
-        // }
     }
 
     fn print_statement(&mut self) -> ParseResult {
@@ -343,6 +354,10 @@ impl<'a> Parser<'a> {
 
     fn parse_variable(&mut self) -> Result<usize, CompilationError> {
         self.match_and_consume(TokenType::Identifier)?;
+        self.declare_variable()?;
+        if self.compiler.scope_depth > 0 {
+            return Ok(0);
+        }
         let ident = self.scanner.make_str(self.prev).to_owned();
         let val = Value::new_string(ident);
         let idx = self.chunk.add_constant(val);
@@ -350,6 +365,10 @@ impl<'a> Parser<'a> {
     }
 
     fn define_variable(&mut self, glob_var_idx: usize) {
+        if self.compiler.scope_depth > 0 {
+            self.compiler.local[self.compiler.local_cnt - 1].depth = self.compiler.scope_depth;
+            return;
+        }
         self.emit_byte(OpCode::DefGlob);
         self.emit_byte(glob_var_idx as u8);
     }
@@ -358,22 +377,103 @@ impl<'a> Parser<'a> {
         self.named_variable(can_assign)
     }
 
+    fn declare_variable(&mut self) -> ParseResult {
+        if self.compiler.scope_depth == 0 {
+            return Ok(());
+        }
+        let name = self.prev;
+        for local in self.compiler.local[..self.compiler.local_cnt]
+            .iter()
+            .rev()
+            .take_while(|local| {
+                !(local.depth != usize::MAX && local.depth < self.compiler.scope_depth)
+            })
+        {
+            if dbg!(self.scanner.make_str(name)) == dbg!(self.scanner.make_str(local.name)) {
+                return Err(CompilationError::LocalVariableRedefine);
+            }
+        }
+        self.add_local(name)?;
+        // for i in 0..self.compiler.local_cnt {
+        //     eprintln!("{:?}", self.compiler.local[i]);
+        // }
+        Ok(())
+    }
+
+    fn add_local(&mut self, name: Token) -> ParseResult {
+        if self.compiler.local_cnt == self.compiler.local.len() {
+            return Err(CompilationError::TooMuchStackVariable);
+        }
+        let local = Local {
+            name,
+            // depth: self.compiler.scope_depth,
+            depth: usize::MAX,
+        };
+        self.compiler.local[self.compiler.local_cnt] = local;
+        self.compiler.local_cnt += 1;
+        Ok(())
+    }
+
     fn named_variable(&mut self, can_assign: bool) -> ParseResult {
         let ident = self.scanner.make_str(self.prev).to_owned();
         let val = Value::new_string(ident);
-        let idx = self.chunk.add_constant(val);
+        let (set_op, get_op, idx) = match self.resolve_local(self.prev)? {
+            Some(idx) => (OpCode::GetLocal, OpCode::SetLocal, idx),
+            None => (
+                OpCode::GetGlob,
+                OpCode::SetGlob,
+                self.chunk.add_constant(val),
+            ),
+        };
         if can_assign && self.match_and_consume(TokenType::Assign).is_ok() {
             self.expression()?;
-            self.emit_byte(OpCode::DefGlob);
+            self.emit_byte(set_op);
         } else {
-            self.emit_byte(OpCode::GetGlob);
+            self.emit_byte(get_op);
         }
         self.emit_byte(idx as u8);
         Ok(())
     }
+
+    fn block(&mut self) -> ParseResult {
+        while !(self.check(TokenType::RBrace) || self.check(TokenType::Eof)) {
+            self.declaration()?;
+        }
+        self.match_and_consume(TokenType::RBrace)
+    }
+
+    fn new_scope(&mut self) {
+        self.compiler.scope_depth += 1;
+    }
+
+    fn del_scope(&mut self) {
+        self.compiler.scope_depth -= 1;
+        while self.compiler.local_cnt > 0
+            && self.compiler.local[self.compiler.local_cnt - 1].depth > self.compiler.scope_depth
+        {
+            self.emit_byte(OpCode::Pop);
+            self.compiler.local_cnt -= 1;
+        }
+    }
+
+    fn resolve_local(&self, name: Token) -> Result<Option<usize>, CompilationError> {
+        for (idx, local) in self.compiler.local[..self.compiler.local_cnt]
+            .iter()
+            .enumerate()
+            .rev()
+        {
+            if self.scanner.make_str(local.name) == self.scanner.make_str(name) {
+                if local.depth == usize::MAX {
+                    return Err(CompilationError::ReadWhileDefining);
+                }
+                return Ok(Some(idx));
+            }
+        }
+        Ok(None)
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy)]
 struct Local {
     name: Token,
     depth: usize,
@@ -386,6 +486,16 @@ pub struct Compiler {
     local: [Local; LOCAL_SIZE],
     local_cnt: usize,
     scope_depth: usize,
+}
+
+impl Compiler {
+    fn new() -> Compiler {
+        Compiler {
+            local: [Local::default(); LOCAL_SIZE],
+            local_cnt: 0,
+            scope_depth: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -447,6 +557,9 @@ pub enum CompilationError {
     NotWantedToken,
     NoPrefixRule,
     InvalidAssignment,
+    TooMuchStackVariable,
+    LocalVariableRedefine,
+    ReadWhileDefining,
 }
 
 #[derive(Debug)]
@@ -458,7 +571,8 @@ pub enum CompileTimeError {
 pub fn compile(source: &Bytes) -> Result<Chunk, CompileTimeError> {
     let mut chunk = Chunk::new();
     let scanner = Scanner::new(source);
-    let mut parser = Parser::new(&mut chunk, scanner);
+    let mut compiler = Compiler::new();
+    let mut parser = Parser::new(&mut chunk, scanner, &mut compiler);
 
     parser.advance().map_err(CompileTimeError::Tokenization)?;
     while parser.match_and_consume(TokenType::Eof).is_err() {
