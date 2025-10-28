@@ -106,7 +106,7 @@ impl<'byte> Scanner<'byte> {
         if self.cursor_point_to_end() {
             return Ok(Token::new(self, TokenType::Eof));
         }
-        let tk = match self.consume() {
+        Ok(match self.consume() {
             b'(' => Token::new(self, TokenType::LParen),
             b')' => Token::new(self, TokenType::RParen),
             b'{' => Token::new(self, TokenType::LBrace),
@@ -191,9 +191,7 @@ impl<'byte> Scanner<'byte> {
                 }
             }
             _ => Token::new(self, TokenType::Unexpected),
-        };
-        println!("{tk:?}");
-        Ok(tk)
+        })
     }
 }
 
@@ -256,12 +254,6 @@ pub enum TokenType {
     Identifier,
     StringLiteral,
     NumberLiteral,
-    Comment,
-    // Tab,
-    Whitespace,
-    // Newline,
-    Quote,
-    // Number,
     Unexpected,
     #[default]
     Eof,
@@ -282,6 +274,8 @@ pub enum TokenType {
     True,
     Var,
     While,
+    // Placeholder
+    // Placeholder,
 }
 
 fn keyword_match() -> &'static HashMap<Bytes, TokenType> {

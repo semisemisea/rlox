@@ -22,30 +22,12 @@ pub enum OpCode {
     Equal,
     Less,
     Greater,
+    Print,
+    Pop,
+    DefGlob,
+    GetGlob,
+    SetGlob,
 }
-
-// impl From<u8> for OpCode {
-//     fn from(value: u8) -> Self {
-//         match value {
-//             0 => OpCode::Return,
-//             1 => OpCode::Constant,
-//             2 => OpCode::ConstantLong,
-//             3 => OpCode::Negate,
-//             4 => OpCode::Add,
-//             5 => OpCode::Subtract,
-//             6 => OpCode::Multiply,
-//             7 => OpCode::Divide,
-//             8 => OpCode::Nil,
-//             9 => OpCode::True,
-//             10 => OpCode::False,
-//             11 => OpCode::Not,
-//             12 => OpCode::Equal,
-//             13 => OpCode::Less,
-//             14 => OpCode::Greater,
-//             _ => todo!(),
-//         }
-//     }
-// }
 
 #[derive(Debug, Default)]
 pub struct Chunk {
@@ -182,6 +164,21 @@ impl Chunk {
             }
             OpCode::Greater => {
                 print!("OP_GREATER")
+            }
+            OpCode::Print => {
+                print!("OP_PRINT")
+            }
+            OpCode::Pop => {
+                print!("OP_POP")
+            }
+            OpCode::DefGlob => {
+                print!("OP_DEFINE_GLOBAL")
+            }
+            OpCode::GetGlob => {
+                print!("OP_GET_GLOBAL")
+            }
+            OpCode::SetGlob => {
+                print!("OP_SET_GLOBAL")
             }
         };
         println!();

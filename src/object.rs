@@ -5,6 +5,7 @@ pub enum LoxObjType {
     String,
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct LoxObj {
     pub obj_type: LoxObjType,

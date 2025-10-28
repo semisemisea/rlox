@@ -1,8 +1,11 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use num_enum::UnsafeFromPrimitive;
 
+use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::op_code::{Chunk, OpCode};
 use crate::lox_object::lox_string::LoxString;
-use crate::object::LoxObj;
 use crate::value::{self, Value, ValueType};
 
 const STACK_MAX: usize = 2048;
@@ -14,6 +17,13 @@ pub enum RuntimeError {
         should_be: ValueType,
         actual: ValueType,
     },
+    UndefinedVariable {
+        var_name: String,
+    },
+}
+
+thread_local! {
+    pub static INTERNED_STRING: RefCell<HashMap<RLoxHashMapKey, Value>> = RefCell::new(HashMap::new());
 }
 
 pub struct VM {
@@ -21,10 +31,11 @@ pub struct VM {
     ip: *const u8,
     stack: [Value; STACK_MAX],
     stack_top: *mut Value,
+    globals: HashMap<RLoxHashMapKey, Value>,
 }
 
-unsafe impl Send for VM {}
-unsafe impl Sync for VM {}
+// unsafe impl Send for VM {}
+// unsafe impl Sync for VM {}
 
 macro_rules! type_error {
     ($expect:expr, $actual:expr) => {
@@ -50,6 +61,7 @@ impl VM {
             ip: std::ptr::null(),
             stack: [Value::default(); STACK_MAX],
             stack_top: std::ptr::null_mut(),
+            globals: HashMap::new(),
         }
     }
 
@@ -85,13 +97,11 @@ impl VM {
             let op = unsafe { OpCode::unchecked_transmute_from(self.read_byte()) };
             match op {
                 OpCode::Return => {
-                    println!("print the stack_top {}", self.pop());
                     break;
                 }
                 OpCode::Constant => {
                     let constant = self.read_constant();
                     self.push(constant);
-                    println!("{constant}");
                 }
                 OpCode::ConstantLong => todo!(),
                 OpCode::Negate => unsafe {
@@ -114,12 +124,14 @@ impl VM {
                         lhs_filling.number += rhs_filling.number;
                     }
                     if rhs.is_string() {
-                        let lhs = self.peek(0);
+                        let lhs = self.pop();
                         if !lhs.is_string() {
                             type_error!(ValueType::LoxObject, lhs.type_of());
                         }
-                        let mut lhs = (lhs.as_mut_object() as *mut LoxString).read();
-                        lhs.chars += &rhs.as_obj_string().chars;
+                        let rhs = (rhs.as_mut_object() as *mut LoxString).as_ref().unwrap();
+                        let lhs = (lhs.as_mut_object() as *mut LoxString).read();
+                        let ret = Value::new_string(lhs + rhs);
+                        self.push(ret);
                     }
                 },
                 OpCode::Subtract => unsafe {
@@ -176,6 +188,42 @@ impl VM {
                     simple_type_check!(self, 0, rhs.type_of());
                     let lhs = self.pop();
                     self.push(Value::new_bool(lhs > rhs));
+                }
+                OpCode::Print => {
+                    println!("{}", self.pop());
+                }
+                OpCode::Pop => {
+                    self.pop();
+                }
+                OpCode::DefGlob => {
+                    let idx = self.read_byte();
+                    let var_name = self.chunk.constants()[idx as usize].as_obj_string();
+                    let map_key = RLoxHashMapKey(var_name.into());
+                    let item = self.peek(0);
+                    self.globals.insert(map_key, item);
+                }
+                OpCode::GetGlob => {
+                    let idx = self.read_byte();
+                    let var_name = self.chunk.constants()[idx as usize].as_obj_string();
+                    let map_key = RLoxHashMapKey(var_name.into());
+                    let Some(val) = self.globals.get(&map_key) else {
+                        return Err(RuntimeError::UndefinedVariable {
+                            var_name: var_name.chars.clone(),
+                        });
+                    };
+                    self.push(*val);
+                }
+                OpCode::SetGlob => {
+                    let idx = self.read_byte();
+                    let var_name = self.chunk.constants()[idx as usize].as_obj_string();
+                    let map_key = RLoxHashMapKey(var_name.into());
+                    let item = self.peek(0);
+                    let Some(val) = self.globals.get_mut(&map_key) else {
+                        return Err(RuntimeError::UndefinedVariable {
+                            var_name: var_name.chars.clone(),
+                        });
+                    };
+                    *val = item;
                 }
             }
         }

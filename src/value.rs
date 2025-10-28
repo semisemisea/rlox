@@ -1,5 +1,9 @@
+use std::collections::hash_map::Entry;
 use std::fmt::Debug;
+use std::ptr::NonNull;
 
+use crate::comp::hash_table::RLoxHashMapKey;
+use crate::comp::vm::{INTERNED_STRING, VM};
 use crate::gc::OBJ_HEAD_PTR;
 use crate::lox_object::lox_string::LoxString;
 use crate::object::{LoxObj, LoxObjType};
@@ -132,20 +136,36 @@ impl Value {
         NIL
     }
 
-    fn new_obj(obj_ptr: *mut LoxObj) -> Value {
-        let l_obj = obj_ptr;
+    fn new_obj(obj_ptr: *const LoxObj) -> Value {
         OBJ_HEAD_PTR.with_borrow_mut(|vm_obj_ptr_head| {
-            unsafe { l_obj.as_mut().unwrap().next = *vm_obj_ptr_head }
-            *vm_obj_ptr_head = l_obj as *mut LoxObj;
+            unsafe { obj_ptr.cast_mut().as_mut().unwrap().next = *vm_obj_ptr_head }
+            *vm_obj_ptr_head = obj_ptr as *mut LoxObj;
         });
         Value {
             v_type: ValueType::LoxObject,
-            v_fill: Fillings { obj_ptr: l_obj },
+            v_fill: Fillings {
+                obj_ptr: obj_ptr as *mut LoxObj,
+            },
         }
     }
 
     pub fn new_string<T: Into<LoxString>>(item: T) -> Value {
-        Value::new_obj(Box::into_raw(Box::new(item.into())) as *mut LoxObj)
+        // String intern.
+        let lox_str: *mut LoxString = Box::into_raw(Box::new(item.into()));
+        let entry_key = RLoxHashMapKey(NonNull::new(lox_str).unwrap());
+        INTERNED_STRING.with_borrow_mut(|map| match map.entry(entry_key) {
+            Entry::Vacant(entry) => {
+                let val = Value::new_obj(lox_str as *mut LoxObj as *const LoxObj);
+                *entry.insert(val)
+            }
+            Entry::Occupied(entry) => {
+                unsafe { drop(Box::from_raw(lox_str)) };
+                *entry.get()
+            }
+        })
+
+        // Original logic.
+        // Value::new_obj(Box::into_raw(Box::new(lox_str)) as *mut LoxObj)
     }
 
     #[inline(always)]
