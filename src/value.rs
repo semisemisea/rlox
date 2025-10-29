@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 
 use crate::comp::hash_table::RLoxHashMapKey;
-use crate::comp::vm::{INTERNED_STRING, VM};
+use crate::comp::vm::INTERNED_STRING;
 use crate::gc::OBJ_HEAD_PTR;
 use crate::lox_object::lox_string::LoxString;
 use crate::object::{LoxObj, LoxObjType};
@@ -60,6 +60,11 @@ pub struct Value {
     v_type: ValueType,
     v_fill: Fillings,
 }
+
+// WARNING: This version of rlox is single vm, single threaded version.
+// So we can impl these unsafe trait for more use.
+unsafe impl Send for Value {}
+unsafe impl Sync for Value {}
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {

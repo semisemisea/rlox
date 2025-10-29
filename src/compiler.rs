@@ -4,7 +4,7 @@ use crate::{
     value::Value,
 };
 use bytes::Bytes;
-use std::{cell::RefCell, collections::HashMap, sync::OnceLock, thread::scope};
+use std::{collections::HashMap, sync::OnceLock};
 
 static DEFAULT_RULE: ParseRule = ParseRule {
     prefix: None,
@@ -88,6 +88,14 @@ fn rule_map() -> &'static HashMap<TokenType, ParseRule> {
             TokenType::Identifier,
             ParseRule::new(Some(variable), None, Precedence::None),
         );
+        map.insert(
+            TokenType::And,
+            ParseRule::new(None, Some(and), Precedence::And),
+        );
+        map.insert(
+            TokenType::Or,
+            ParseRule::new(None, Some(or), Precedence::Or),
+        );
 
         map
     })
@@ -119,6 +127,14 @@ fn string(parser: &mut Parser, can_assign: bool) -> ParseResult {
 
 fn variable(parser: &mut Parser, can_assign: bool) -> ParseResult {
     parser.variable(can_assign)
+}
+
+fn and(parser: &mut Parser, can_assign: bool) -> ParseResult {
+    parser.and(can_assign)
+}
+
+fn or(parser: &mut Parser, can_assign: bool) -> ParseResult {
+    parser.or(can_assign)
 }
 
 #[derive(Debug)]
@@ -157,7 +173,7 @@ impl<'a> Parser<'a> {
 
     // NOTE: Number Literal branch.
     // Also load a constant number into constants pool;
-    fn number(&mut self, can_assign: bool) -> ParseResult {
+    fn number(&mut self, _can_assign: bool) -> ParseResult {
         let num = self.scanner.make_str(self.prev).parse::<f64>().unwrap();
         let val = Value::new_num(num);
         self.emit_constant(val)
@@ -174,9 +190,11 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    // NOTE: Add a return.
-    fn emit_return(&mut self) {
-        self.emit_byte(OpCode::Return);
+    fn emit_jump(&mut self, instruction: OpCode) -> usize {
+        self.emit_byte(instruction);
+        self.emit_byte(0xff);
+        self.emit_byte(0xff);
+        self.chunk.ip_len() - 2
     }
 
     // WARNING: Need to handle result here. But just unwrap for now.
@@ -186,7 +204,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn literal(&mut self, can_assign: bool) -> ParseResult {
+    fn literal(&mut self, _can_assign: bool) -> ParseResult {
         match self.prev.token_type {
             TokenType::False => self.emit_byte(OpCode::False),
             TokenType::True => self.emit_byte(OpCode::True),
@@ -202,7 +220,10 @@ impl<'a> Parser<'a> {
             self.advance().unwrap();
             Ok(())
         } else {
-            Err(CompilationError::NotWantedToken)
+            Err(CompilationError::NotWantedToken {
+                desire_type: token_type,
+                actual: self.curr,
+            })
         }
     }
 
@@ -211,13 +232,13 @@ impl<'a> Parser<'a> {
     }
 
     // NOTE: ('inside') Parenthesis branch.
-    fn grouping(&mut self, can_assign: bool) -> ParseResult {
+    fn grouping(&mut self, _can_assign: bool) -> ParseResult {
         self.expression()?;
         self.match_and_consume(TokenType::RParen)
     }
 
     // NOTE: Unary branch.
-    fn unary(&mut self, can_assign: bool) -> ParseResult {
+    fn unary(&mut self, _can_assign: bool) -> ParseResult {
         let token_type = self.prev.token_type;
         self.parse(Precedence::Unary)?;
         match token_type {
@@ -228,7 +249,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn binary(&mut self, can_assign: bool) -> ParseResult {
+    fn binary(&mut self, _can_assign: bool) -> ParseResult {
         let prev_type = self.prev.token_type;
         let rule = self.get_rule_prev();
         self.parse(rule.precedence.next_prece())?;
@@ -255,7 +276,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn string(&mut self, can_assign: bool) -> ParseResult {
+    fn string(&mut self, _can_assign: bool) -> ParseResult {
         let str = self.scanner.make_str(self.prev).to_owned();
         self.emit_constant(Value::new_string(str))?;
         Ok(())
@@ -288,10 +309,10 @@ impl<'a> Parser<'a> {
         let rule = self.get_rule_prev();
 
         let Some(prefix_rule) = rule.prefix else {
-            return Err(CompilationError::NoPrefixRule);
+            return Err(CompilationError::NoPrefixRule(self.prev));
         };
         let can_assign = prece <= Precedence::Assignment;
-        prefix_rule(self, can_assign).unwrap();
+        prefix_rule(self, can_assign)?;
         while prece <= self.get_rule_curr().precedence {
             // TODO: Error handling.
             self.advance().unwrap();
@@ -321,6 +342,10 @@ impl<'a> Parser<'a> {
             self.block()?;
             self.del_scope();
             Ok(())
+        } else if self.match_and_consume(TokenType::If).is_ok() {
+            self.if_statement()
+        } else if self.match_and_consume(TokenType::While).is_ok() {
+            self.while_statement()
         } else {
             self.expression_statement()
         }
@@ -417,7 +442,7 @@ impl<'a> Parser<'a> {
     fn named_variable(&mut self, can_assign: bool) -> ParseResult {
         let ident = self.scanner.make_str(self.prev).to_owned();
         let val = Value::new_string(ident);
-        let (set_op, get_op, idx) = match self.resolve_local(self.prev)? {
+        let (get_op, set_op, idx) = match self.resolve_local(self.prev)? {
             Some(idx) => (OpCode::GetLocal, OpCode::SetLocal, idx),
             None => (
                 OpCode::GetGlob,
@@ -470,6 +495,78 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(None)
+    }
+
+    fn if_statement(&mut self) -> ParseResult {
+        self.match_and_consume(TokenType::LParen)?;
+        self.expression()?;
+        self.match_and_consume(TokenType::RParen)?;
+
+        let then_offset = self.emit_jump(OpCode::JumpIfFalse);
+        self.emit_byte(OpCode::Pop);
+        self.statement()?;
+        let else_offset = self.emit_jump(OpCode::Jump);
+        self.patch_jump(then_offset)?;
+        self.emit_byte(OpCode::Pop);
+
+        if self.match_and_consume(TokenType::Else).is_ok() {
+            self.statement()?;
+        }
+        self.patch_jump(else_offset)?;
+        Ok(())
+    }
+
+    fn patch_jump(&mut self, offset: usize) -> ParseResult {
+        let jump_to = self.chunk.ip_len() - offset - 2;
+        if jump_to > u16::MAX as usize {
+            return Err(CompilationError::ExceedJumpLimit);
+        }
+        self.chunk.modify(offset, (jump_to >> 8) as u8);
+        self.chunk.modify(offset + 1, jump_to as u8);
+        Ok(())
+    }
+
+    fn and(&mut self, _can_assign: bool) -> ParseResult {
+        let end_jump = self.emit_jump(OpCode::JumpIfFalse);
+        self.emit_jump(OpCode::Pop);
+        self.parse(Precedence::And)?;
+        self.patch_jump(end_jump)
+    }
+
+    fn or(&mut self, _can_assign: bool) -> ParseResult {
+        let else_jump = self.emit_jump(OpCode::JumpIfFalse);
+        let end_jump = self.emit_jump(OpCode::Jump);
+        self.patch_jump(else_jump)?;
+        self.emit_byte(OpCode::Pop);
+        self.parse(Precedence::Or)?;
+        self.patch_jump(end_jump)?;
+        self.patch_jump(end_jump)
+    }
+
+    fn while_statement(&mut self) -> ParseResult {
+        let loop_start = self.chunk.ip_len();
+        self.match_and_consume(TokenType::LParen)?;
+        self.expression()?;
+        self.match_and_consume(TokenType::RParen)?;
+
+        let exit_jump = self.emit_jump(OpCode::JumpIfFalse);
+        self.emit_byte(OpCode::Pop);
+        self.statement()?;
+        self.emit_loop(loop_start)?;
+        self.patch_jump(exit_jump)?;
+        self.emit_byte(OpCode::Pop);
+        Ok(())
+    }
+
+    fn emit_loop(&mut self, loop_start: usize) -> ParseResult {
+        self.emit_byte(OpCode::Loop);
+        let offset = self.chunk.ip_len() - loop_start + 2;
+        if offset > u16::MAX as usize {
+            return Err(CompilationError::ExceedJumpLimit);
+        }
+        self.emit_byte((offset >> 8) as u8);
+        self.emit_byte(offset as u8);
+        Ok(())
     }
 }
 
@@ -550,22 +647,35 @@ impl ParseRule {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CompilationError {
+    #[error("Too much constants...")]
     TooMuchConstants,
-    UnresolvedRParen,
-    NotWantedToken,
-    NoPrefixRule,
+    #[error("{actual:?} is not the wanted token {desire_type:?}...")]
+    NotWantedToken {
+        desire_type: TokenType,
+        actual: Token,
+    },
+    #[error("This operator {0:?} got no prefix rule...")]
+    NoPrefixRule(Token),
+    #[error("This is not a valid assignment...")]
     InvalidAssignment,
+    #[error("You've create too much stack variable...")]
     TooMuchStackVariable,
+    #[error("You redefine a local variable in the same scope twice...")]
     LocalVariableRedefine,
+    #[error("You are trying to read a variable while defining it...")]
     ReadWhileDefining,
+    #[error("Too much code to jump over...")]
+    ExceedJumpLimit,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CompileTimeError {
-    Tokenization(TokenError),
-    Compilation(CompilationError),
+    #[error("Stage: Tokenization; Error msg: {0:?}")]
+    Tokenization(#[from] TokenError),
+    #[error("Stage: Compilation; Error msg: {0:?}")]
+    Compilation(#[from] CompilationError),
 }
 
 pub fn compile(source: &Bytes) -> Result<Chunk, CompileTimeError> {

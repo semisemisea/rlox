@@ -10,16 +10,16 @@ use crate::value::{self, Value, ValueType};
 
 const STACK_MAX: usize = 2048;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error("Token should be {should_be:?} but is actually {actual:?}")]
     TypeError {
         // line: usize,
         should_be: ValueType,
-        actual: ValueType,
+        actual: Value,
     },
-    UndefinedVariable {
-        var_name: String,
-    },
+    #[error("UndefinedVariable {var_name}")]
+    UndefinedVariable { var_name: String },
 }
 
 thread_local! {
@@ -49,7 +49,7 @@ macro_rules! type_error {
 macro_rules! simple_type_check {
     ($self:expr, $dist:expr, $exp_type:expr) => {
         if $self.peek($dist).type_of() != $exp_type {
-            type_error!($exp_type, $self.peek($dist).type_of())
+            type_error!($exp_type, $self.peek($dist))
         }
     };
 }
@@ -70,8 +70,20 @@ impl VM {
         self.ip = self.chunk.code_top_ptr();
     }
 
-    fn read_byte(&mut self) -> u8 {
+    fn read_u8(&mut self) -> u8 {
         let ret = unsafe { *self.ip };
+        unsafe {
+            self.ip = self.ip.add(1);
+        }
+        ret
+    }
+
+    fn read_u16(&mut self) -> u16 {
+        let mut ret = unsafe { *self.ip as u16 } << 8;
+        unsafe {
+            self.ip = self.ip.add(1);
+        }
+        ret |= unsafe { *self.ip as u16 };
         unsafe {
             self.ip = self.ip.add(1);
         }
@@ -83,18 +95,15 @@ impl VM {
     }
 
     fn read_constant(&mut self) -> Value {
-        let idx = self.read_byte() as usize;
+        let idx = self.read_u8() as usize;
         self.chunk.constants()[idx]
-    }
-
-    pub fn dbg_print(&self) {
-        self.chunk.dbg_print();
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
+            #[cfg(debug_assertions)]
             self.chunk.show_one_op_code(&mut self.ip.clone());
-            let op = unsafe { OpCode::unchecked_transmute_from(self.read_byte()) };
+            let op = unsafe { OpCode::unchecked_transmute_from(self.read_u8()) };
             match op {
                 OpCode::Return => {
                     break;
@@ -109,7 +118,7 @@ impl VM {
                     if !(*top_val).is_number() {
                         return Err(RuntimeError::TypeError {
                             should_be: ValueType::Number,
-                            actual: (*top_val).type_of(),
+                            actual: (*top_val),
                         });
                     }
                     let filling = (*top_val).mut_filling();
@@ -126,7 +135,7 @@ impl VM {
                     if rhs.is_string() {
                         let lhs = self.pop();
                         if !lhs.is_string() {
-                            type_error!(ValueType::LoxObject, lhs.type_of());
+                            type_error!(ValueType::LoxObject, lhs);
                         }
                         let rhs = (rhs.as_mut_object() as *mut LoxString).as_ref().unwrap();
                         let lhs = (lhs.as_mut_object() as *mut LoxString).read();
@@ -196,14 +205,14 @@ impl VM {
                     self.pop();
                 }
                 OpCode::DefGlob => {
-                    let idx = self.read_byte();
+                    let idx = self.read_u8();
                     let var_name = self.chunk.constants()[idx as usize].as_obj_string();
                     let map_key = RLoxHashMapKey(var_name.into());
                     let item = self.peek(0);
                     self.globals.insert(map_key, item);
                 }
                 OpCode::GetGlob => {
-                    let idx = self.read_byte();
+                    let idx = self.read_u8();
                     let var_name = self.chunk.constants()[idx as usize].as_obj_string();
                     let map_key = RLoxHashMapKey(var_name.into());
                     let Some(val) = self.globals.get(&map_key) else {
@@ -214,7 +223,7 @@ impl VM {
                     self.push(*val);
                 }
                 OpCode::SetGlob => {
-                    let idx = self.read_byte();
+                    let idx = self.read_u8();
                     let var_name = self.chunk.constants()[idx as usize].as_obj_string();
                     let map_key = RLoxHashMapKey(var_name.into());
                     let item = self.peek(0);
@@ -226,12 +235,26 @@ impl VM {
                     *val = item;
                 }
                 OpCode::SetLocal => {
-                    let slot = self.read_byte();
+                    let slot = self.read_u8();
                     self.push(self.stack[slot as usize]);
                 }
                 OpCode::GetLocal => {
-                    let slot = self.read_byte();
+                    let slot = self.read_u8();
                     self.stack[slot as usize] = self.peek(0);
+                }
+                OpCode::JumpIfFalse => {
+                    let offset = self.read_u16();
+                    if self.peek(0).is_falsy() {
+                        self.ip = unsafe { self.ip.add(offset as usize) };
+                    }
+                }
+                OpCode::Jump => {
+                    let offset = self.read_u16();
+                    self.ip = unsafe { self.ip.add(offset as usize) };
+                }
+                OpCode::Loop => {
+                    let offset = self.read_u16();
+                    self.ip = unsafe { self.ip.sub(offset as usize) };
                 }
             }
         }
@@ -257,7 +280,11 @@ impl VM {
         }
     }
 
-    fn show(&self) {
+    pub fn show(&self) {
+        println!("---- Error find. Showing stack.");
+        println!();
+        println!();
+        println!();
         println!("----  Stack Info  ----");
         let mut slot = self.stack.as_ptr();
         while slot < self.stack_top {

@@ -302,9 +302,10 @@ fn keyword_match() -> &'static HashMap<Bytes, TokenType> {
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TokenError {
     // UnexpectedToken,
+    #[error("This string never ends...")]
     UnterminatedString,
 }
 

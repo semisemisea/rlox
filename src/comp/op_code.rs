@@ -29,6 +29,9 @@ pub enum OpCode {
     SetGlob,
     GetLocal,
     SetLocal,
+    JumpIfFalse,
+    Jump,
+    Loop,
 }
 
 #[derive(Debug, Default)]
@@ -62,6 +65,14 @@ impl Chunk {
         Self::default()
     }
 
+    pub fn ip_len(&self) -> usize {
+        self.code.len()
+    }
+
+    pub fn modify(&mut self, loc: usize, into: u8) {
+        self.code[loc] = into;
+    }
+
     pub fn write_in(&mut self, byte: u8, line_no: usize) {
         self.code.push(byte);
         if line_no >= self.lines.len() {
@@ -81,14 +92,6 @@ impl Chunk {
         self.constants.len() - 1
     }
 
-    pub fn extend(&mut self, other: &[u8]) {
-        self.code.extend_from_slice(other);
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, u8> {
-        self.code.iter()
-    }
-
     fn get_line(&self, offset: usize) -> usize {
         self.lines.partition_point(|&x| x <= offset) - 1
     }
@@ -97,7 +100,7 @@ impl Chunk {
         println!();
         println!("-----Constant area-----");
         for (idx, val) in self.constants.iter().enumerate() {
-            println!("{} {}", idx, val.as_number());
+            println!("{} {}", idx, val);
         }
         println!("-----Constant end------");
         println!();
@@ -107,88 +110,93 @@ impl Chunk {
         let op = unsafe { **ip };
         match unsafe { OpCode::unchecked_transmute_from(op) } {
             OpCode::Return => {
-                print!("OP_RETURN");
+                print!("{:<20}", "OP_RETURN:");
             }
             OpCode::Constant => {
-                print!("OP_CONSTANT");
-                print!("    ");
+                print!("{:<20}", "OP_CONSTANT:");
                 unsafe { *ip = ip.add(1) }
                 let idx = unsafe { **ip };
-                print!("{idx:>4}");
-                print!("    ");
-                print!("{}", self.constants[idx as usize]);
+                print!("{:>4}    {}", idx, self.constants[idx as usize]);
             }
             OpCode::ConstantLong => {
-                print!("OP_CONSTANT_LONG");
-                print!("    ");
+                print!("{:<20}", "OP_CONSTANT_LONG:");
                 unsafe { *ip = ip.add(1) }
                 let mut idx = (unsafe { **ip } as u32) << 16;
                 unsafe { *ip = ip.add(1) }
-                idx ^= (unsafe { **ip } as u32) << 8;
+                idx |= (unsafe { **ip } as u32) << 8;
                 unsafe { *ip = ip.add(1) }
-                idx ^= unsafe { **ip } as u32;
-                print!("{idx:>4}");
-                print!("    ");
-                print!("{}", self.constants[idx as usize].as_number());
+                idx |= unsafe { **ip } as u32;
+                print!("{:>4}    {}", idx, self.constants[idx as usize].as_number());
             }
-            OpCode::Negate => {
-                print!("OP_NEGATE");
-            }
-            OpCode::Add => {
-                print!("OP_ADD");
-            }
-            OpCode::Subtract => {
-                print!("OP_SUBTRACT");
-            }
-            OpCode::Multiply => {
-                print!("OP_MULTIPLY");
-            }
-            OpCode::Divide => {
-                print!("OP_DIVIDE");
-            }
-            OpCode::Nil => {
-                print!("LITERAL_NIL");
-            }
-            OpCode::True => {
-                print!("LITERAL_TRUE");
-            }
-            OpCode::False => {
-                print!("LITERAL_FALSE");
-            }
-            OpCode::Not => {
-                print!("OP_NOT")
-            }
-            OpCode::Equal => {
-                print!("OP_EQUAL")
-            }
-            OpCode::Less => {
-                print!("OP_LESS")
-            }
-            OpCode::Greater => {
-                print!("OP_GREATER")
-            }
-            OpCode::Print => {
-                print!("OP_PRINT")
-            }
-            OpCode::Pop => {
-                print!("OP_POP")
-            }
+            OpCode::Negate => print!("{:<20}", "OP_NEGATE:"),
+            OpCode::Add => print!("{:<20}", "OP_ADD:"),
+            OpCode::Subtract => print!("{:<20}", "OP_SUBTRACT:"),
+            OpCode::Multiply => print!("{:<20}", "OP_MULTIPLY:"),
+            OpCode::Divide => print!("{:<20}", "OP_DIVIDE:"),
+            OpCode::Nil => print!("{:<20}", "LITERAL_NIL:"),
+            OpCode::True => print!("{:<20}", "LITERAL_TRUE:"),
+            OpCode::False => print!("{:<20}", "LITERAL_FALSE:"),
+            OpCode::Not => print!("{:<20}", "OP_NOT:"),
+            OpCode::Equal => print!("{:<20}", "OP_EQUAL:"),
+            OpCode::Less => print!("{:<20}", "OP_LESS:"),
+            OpCode::Greater => print!("{:<20}", "OP_GREATER:"),
+            OpCode::Print => print!("{:<20}", "OP_PRINT:"),
+            OpCode::Pop => print!("{:<20}", "OP_POP:"),
             OpCode::DefGlob => {
-                print!("OP_DEFINE_GLOBAL")
+                print!("{:<20}", "OP_DEFINE_GLOBAL:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}    {}", idx, self.constants[idx as usize]);
             }
             OpCode::GetGlob => {
-                print!("OP_GET_GLOBAL")
+                print!("{:<20}", "OP_GET_GLOBAL:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}    {}", idx, self.constants[idx as usize]);
             }
             OpCode::SetGlob => {
-                print!("OP_SET_GLOBAL")
+                print!("{:<20}", "OP_SET_GLOBAL:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}    {}", idx, self.constants[idx as usize]);
             }
             OpCode::GetLocal => {
-                print!("OP_GET_LOCAL")
+                print!("{:<20}", "OP_GET_LOCAL:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}    {}", idx, self.constants[idx as usize]);
             }
             OpCode::SetLocal => {
-                print!("OP_SET_LOCAL")
+                print!("{:<20}", "OP_SET_LOCAL:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}    {}", idx, self.constants[idx as usize]);
             }
-        };
+            OpCode::JumpIfFalse => {
+                print!("{:<20}", "OP_JUMP_IF_FALSE:");
+                unsafe { *ip = ip.add(1) }
+                let mut offset = (unsafe { **ip } as u16) << 8;
+                unsafe { *ip = ip.add(1) }
+                offset |= unsafe { **ip } as u16;
+                print!("{:>4}", offset);
+            }
+            OpCode::Jump => {
+                print!("{:<20}", "OP_JUMP:");
+                unsafe { *ip = ip.add(1) }
+                let mut offset = (unsafe { **ip } as u16) << 8;
+                unsafe { *ip = ip.add(1) }
+                offset |= unsafe { **ip } as u16;
+                print!("{:>4}", offset);
+            }
+            OpCode::Loop => {
+                print!("{:<20}", "OP_LOOP:");
+                unsafe { *ip = ip.add(1) }
+                let mut offset = (unsafe { **ip } as u16) << 8;
+                unsafe { *ip = ip.add(1) }
+                offset |= unsafe { **ip } as u16;
+                print!("{:>4}", offset);
+            }
+        }
         println!();
         unsafe { *ip = ip.add(1) }
     }
