@@ -4,7 +4,8 @@ use std::ptr::NonNull;
 
 use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::vm::INTERNED_STRING;
-use crate::gc::OBJ_HEAD_PTR;
+use crate::gc::{self, OBJ_HEAD_PTR};
+use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
 use crate::object::{LoxObj, LoxObjType};
 
@@ -108,8 +109,12 @@ impl std::fmt::Display for Value {
                 let obj_type = unsafe { obj_ptr.as_ref().unwrap().obj_type };
                 match obj_type {
                     LoxObjType::String => {
-                        let casted_ptr = obj_ptr as *mut LoxString;
-                        write!(f, "\"{}\"", unsafe { &casted_ptr.as_ref().unwrap().chars })
+                        let casted_ptr = obj_ptr as *const LoxString;
+                        write!(f, "\"{}\"", unsafe { &(*casted_ptr).chars })
+                    }
+                    LoxObjType::Function => {
+                        let casted_ptr = obj_ptr as *const LoxFunction;
+                        write!(f, "<fn {}>", unsafe { &(*(*casted_ptr).name).chars })
                     }
                 }
             }
@@ -118,10 +123,6 @@ impl std::fmt::Display for Value {
 }
 
 impl Value {
-    pub fn change_type_to(&mut self, new_type: ValueType) {
-        self.v_type = new_type
-    }
-
     pub fn mut_filling(&mut self) -> &mut Fillings {
         &mut self.v_fill
     }
@@ -137,15 +138,8 @@ impl Value {
         if boolean { TRUE } else { FALSE }
     }
 
-    pub fn new_nil() -> Value {
-        NIL
-    }
-
     fn new_obj(obj_ptr: *const LoxObj) -> Value {
-        OBJ_HEAD_PTR.with_borrow_mut(|vm_obj_ptr_head| {
-            unsafe { obj_ptr.cast_mut().as_mut().unwrap().next = *vm_obj_ptr_head }
-            *vm_obj_ptr_head = obj_ptr as *mut LoxObj;
-        });
+        gc::register(obj_ptr as _);
         Value {
             v_type: ValueType::LoxObject,
             v_fill: Fillings {
@@ -156,7 +150,7 @@ impl Value {
 
     pub fn new_string<T: Into<LoxString>>(item: T) -> Value {
         // String intern.
-        let lox_str: *mut LoxString = Box::into_raw(Box::new(item.into()));
+        let lox_str = Box::into_raw(Box::new(item.into()));
         let entry_key = RLoxHashMapKey(NonNull::new(lox_str).unwrap());
         INTERNED_STRING.with_borrow_mut(|map| match map.entry(entry_key) {
             Entry::Vacant(entry) => {
@@ -172,6 +166,15 @@ impl Value {
         // Original logic.
         // Value::new_obj(Box::into_raw(Box::new(lox_str)) as *mut LoxObj)
     }
+
+    // Definition.
+    // pub struct LoxFunction<'a> {
+    //     obj: LoxObj,
+    //     arity: usize,
+    //     chunk: Chunk,
+    //     name: &'a LoxString,
+    // }
+    // pub fn new_function<T: Into<LoxString>>(name: T) -> Value {}
 
     #[inline(always)]
     pub fn type_of(&self) -> ValueType {
@@ -198,13 +201,14 @@ impl Value {
         self.type_of() == ValueType::LoxObject
     }
 
-    pub fn match_obj_type(&self, obj_type: LoxObjType) -> bool {
-        self.is_object() && unsafe { self.as_object().as_ref().unwrap().obj_type == obj_type }
-    }
-
     pub fn is_string(&self) -> bool {
         self.is_object()
             && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::String
+    }
+
+    pub fn is_function(&self) -> bool {
+        self.is_object()
+            && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::Function
     }
 
     pub fn as_bool(&self) -> bool {
@@ -232,14 +236,9 @@ impl Value {
         unsafe { (self.as_object() as *const LoxString).as_ref().unwrap() }
     }
 
-    pub fn as_mut_rust_string(&mut self) -> &mut String {
-        debug_assert!(self.is_string());
-        unsafe {
-            &mut (self.as_mut_object() as *mut LoxString)
-                .as_mut()
-                .unwrap()
-                .chars
-        }
+    pub fn as_obj_function(&self) -> &LoxFunction {
+        debug_assert!(self.is_function());
+        unsafe { (self.as_object() as *const LoxFunction).as_ref().unwrap() }
     }
 
     pub fn is_falsy(&self) -> bool {

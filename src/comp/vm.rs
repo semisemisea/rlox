@@ -5,10 +5,12 @@ use num_enum::UnsafeFromPrimitive;
 
 use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::op_code::{Chunk, OpCode};
+use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
 use crate::value::{self, Value, ValueType};
 
-const STACK_MAX: usize = 2048;
+const FRAMES_MAX: usize = 64;
+const STACK_MAX: usize = FRAMES_MAX * u8::MAX as usize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -26,16 +28,21 @@ thread_local! {
     pub static INTERNED_STRING: RefCell<HashMap<RLoxHashMapKey, Value>> = RefCell::new(HashMap::new());
 }
 
+#[derive(Debug)]
 pub struct VM {
-    chunk: Chunk,
-    ip: *const u8,
+    frames: [CallFrame; 64],
+    frame_count: usize,
     stack: [Value; STACK_MAX],
     stack_top: *mut Value,
     globals: HashMap<RLoxHashMapKey, Value>,
 }
 
-// unsafe impl Send for VM {}
-// unsafe impl Sync for VM {}
+#[derive(Debug, Default, Clone, Copy)]
+struct CallFrame {
+    func: *mut LoxFunction,
+    ip: *const u8,
+    slots: *mut Value,
+}
 
 macro_rules! type_error {
     ($expect:expr, $actual:expr) => {
@@ -55,54 +62,86 @@ macro_rules! simple_type_check {
 }
 
 impl VM {
-    pub fn new(chunk: Chunk) -> VM {
+    pub fn new() -> VM {
         VM {
-            chunk,
-            ip: std::ptr::null(),
+            frames: [CallFrame::default(); FRAMES_MAX],
+            frame_count: 0,
             stack: [Value::default(); STACK_MAX],
             stack_top: std::ptr::null_mut(),
             globals: HashMap::new(),
         }
     }
 
-    pub fn init_vm(&mut self) {
+    pub fn init_vm(&mut self, main_func: *const LoxFunction) {
         self.reset_stack();
-        self.ip = self.chunk.code_top_ptr();
+        self.frames[0] = CallFrame {
+            func: main_func.cast_mut(),
+            ip: unsafe { (*main_func).chunk.code_top_ptr() },
+            slots: self.stack.as_mut_ptr(),
+        };
+        self.frame_count += 1;
+        // self.ip = self.chunk.code_top_ptr();
     }
 
     fn read_u8(&mut self) -> u8 {
-        let ret = unsafe { *self.ip };
+        let ip = self.ip();
+        let ret = unsafe { **ip };
         unsafe {
-            self.ip = self.ip.add(1);
+            *ip = ip.add(1);
         }
         ret
     }
 
     fn read_u16(&mut self) -> u16 {
-        let mut ret = unsafe { *self.ip as u16 } << 8;
+        let ip = self.ip();
+        let mut ret = unsafe { **ip as u16 } << 8;
         unsafe {
-            self.ip = self.ip.add(1);
+            *ip = ip.add(1);
         }
-        ret |= unsafe { *self.ip as u16 };
+        ret |= unsafe { **ip as u16 };
         unsafe {
-            self.ip = self.ip.add(1);
+            *ip = ip.add(1);
         }
         ret
+    }
+
+    fn ip(&mut self) -> &mut *const u8 {
+        &mut self.current_frame().ip
+    }
+
+    fn ip_move_forward(&mut self, step: usize) {
+        let ip = self.ip();
+        *ip = unsafe { ip.add(step) };
+    }
+
+    fn ip_move_backward(&mut self, step: usize) {
+        let ip = self.ip();
+        *ip = unsafe { ip.sub(step) };
+    }
+
+    fn current_frame(&mut self) -> &mut CallFrame {
+        &mut self.frames[self.frame_count - 1]
     }
 
     fn peek(&self, distance: usize) -> Value {
         unsafe { self.stack_top.sub(1 + distance).read() }
     }
 
+    fn current_slot(&mut self, offset: usize) -> &mut Value {
+        unsafe { self.current_frame().slots.add(offset).as_mut().unwrap() }
+    }
+
     fn read_constant(&mut self) -> Value {
         let idx = self.read_u8() as usize;
-        self.chunk.constants()[idx]
+        let chunk = unsafe { &(*self.current_frame().func).chunk };
+        chunk.constants()[idx]
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
+            let chunk = unsafe { &(*self.current_frame().func).chunk };
             #[cfg(debug_assertions)]
-            self.chunk.show_one_op_code(&mut self.ip.clone());
+            chunk.show_one_op_code(&mut self.ip().clone());
             let op = unsafe { OpCode::unchecked_transmute_from(self.read_u8()) };
             match op {
                 OpCode::Return => {
@@ -206,14 +245,14 @@ impl VM {
                 }
                 OpCode::DefGlob => {
                     let idx = self.read_u8();
-                    let var_name = self.chunk.constants()[idx as usize].as_obj_string();
+                    let var_name = chunk.constants()[idx as usize].as_obj_string();
                     let map_key = RLoxHashMapKey(var_name.into());
                     let item = self.peek(0);
                     self.globals.insert(map_key, item);
                 }
                 OpCode::GetGlob => {
                     let idx = self.read_u8();
-                    let var_name = self.chunk.constants()[idx as usize].as_obj_string();
+                    let var_name = chunk.constants()[idx as usize].as_obj_string();
                     let map_key = RLoxHashMapKey(var_name.into());
                     let Some(val) = self.globals.get(&map_key) else {
                         return Err(RuntimeError::UndefinedVariable {
@@ -224,7 +263,7 @@ impl VM {
                 }
                 OpCode::SetGlob => {
                     let idx = self.read_u8();
-                    let var_name = self.chunk.constants()[idx as usize].as_obj_string();
+                    let var_name = chunk.constants()[idx as usize].as_obj_string();
                     let map_key = RLoxHashMapKey(var_name.into());
                     let item = self.peek(0);
                     let Some(val) = self.globals.get_mut(&map_key) else {
@@ -245,16 +284,16 @@ impl VM {
                 OpCode::JumpIfFalse => {
                     let offset = self.read_u16();
                     if self.peek(0).is_falsy() {
-                        self.ip = unsafe { self.ip.add(offset as usize) };
+                        self.ip_move_forward(offset as usize);
                     }
                 }
                 OpCode::Jump => {
                     let offset = self.read_u16();
-                    self.ip = unsafe { self.ip.add(offset as usize) };
+                    self.ip_move_forward(offset as usize);
                 }
                 OpCode::Loop => {
                     let offset = self.read_u16();
-                    self.ip = unsafe { self.ip.sub(offset as usize) };
+                    self.ip_move_backward(offset as usize);
                 }
             }
         }

@@ -42,11 +42,13 @@ fn run_file(file_path: &str) -> Result<()> {
     let file = fs::File::open(file_path).unwrap();
     let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let file_content = Bytes::from_owner(mmap);
-    let chunk = compile(&file_content)?;
+    let main_func = compile(&file_content)?;
     #[cfg(debug_assertions)]
-    chunk.dbg_print();
-    let mut vm = VM::new(chunk);
-    vm.init_vm();
+    unsafe {
+        (*main_func).chunk.dbg_print();
+    }
+    let mut vm = VM::new();
+    vm.init_vm(main_func);
     vm.run().inspect_err(|_| vm.show())?;
     Ok(())
 }

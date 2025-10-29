@@ -1,5 +1,7 @@
 use crate::{
     comp::op_code::{Chunk, OpCode},
+    lox_object::lox_function::{FuncType, LoxFunction},
+    object::{LoxObj, LoxObjType},
     scanner::{Scanner, Token, TokenError, TokenType},
     value::Value,
 };
@@ -141,7 +143,6 @@ fn or(parser: &mut Parser, can_assign: bool) -> ParseResult {
 pub struct Parser<'a> {
     prev: Token,
     curr: Token,
-    chunk: &'a mut Chunk,
     scanner: Scanner<'a>,
     compiler: &'a mut Compiler,
 }
@@ -150,25 +151,23 @@ type ParseResult = Result<(), CompilationError>;
 type ParseFn = for<'a, 'b> fn(&'b mut Parser<'a>, bool) -> ParseResult;
 
 impl<'a> Parser<'a> {
-    pub fn new(
-        chunk: &'a mut Chunk,
-        scanner: Scanner<'a>,
-        compiler: &'a mut Compiler,
-    ) -> Parser<'a> {
+    pub fn new(scanner: Scanner<'a>, compiler: &'a mut Compiler) -> Parser<'a> {
         Parser {
             prev: Token::placeholder(),
             curr: Token::placeholder(),
-            chunk,
             scanner,
             compiler,
         }
     }
 
+    fn chunk(&mut self) -> &mut Chunk {
+        unsafe { &mut (*self.compiler.function).chunk }
+    }
+
     // NOTE: Core method to write a byte into a VM bytecode Chunk.
     fn emit_byte<T: Into<u8>>(&mut self, byte: T) {
-        self.chunk
-            // TODO: May be self.curr -> self.prev       here.
-            .write_in(byte.into(), self.prev.line);
+        let line_no = self.prev.line;
+        self.chunk().write_in(byte.into(), line_no)
     }
 
     // NOTE: Number Literal branch.
@@ -182,7 +181,7 @@ impl<'a> Parser<'a> {
     // NOTE: Load a constant. Also store it in the pool.
     fn emit_constant(&mut self, val: Value) -> ParseResult {
         self.emit_byte(OpCode::Constant);
-        let idx = self.chunk.add_constant(val);
+        let idx = self.chunk().add_constant(val);
         if idx > u8::MAX as usize {
             return Err(CompilationError::TooMuchConstants);
         }
@@ -194,7 +193,7 @@ impl<'a> Parser<'a> {
         self.emit_byte(instruction);
         self.emit_byte(0xff);
         self.emit_byte(0xff);
-        self.chunk.ip_len() - 2
+        self.chunk().ip_len() - 2
     }
 
     // WARNING: Need to handle result here. But just unwrap for now.
@@ -385,7 +384,7 @@ impl<'a> Parser<'a> {
         }
         let ident = self.scanner.make_str(self.prev).to_owned();
         let val = Value::new_string(ident);
-        let idx = self.chunk.add_constant(val);
+        let idx = self.chunk().add_constant(val);
         Ok(idx)
     }
 
@@ -447,7 +446,7 @@ impl<'a> Parser<'a> {
             None => (
                 OpCode::GetGlob,
                 OpCode::SetGlob,
-                self.chunk.add_constant(val),
+                self.chunk().add_constant(val),
             ),
         };
         if can_assign && self.match_and_consume(TokenType::Assign).is_ok() {
@@ -517,12 +516,12 @@ impl<'a> Parser<'a> {
     }
 
     fn patch_jump(&mut self, offset: usize) -> ParseResult {
-        let jump_to = self.chunk.ip_len() - offset - 2;
+        let jump_to = self.chunk().ip_len() - offset - 2;
         if jump_to > u16::MAX as usize {
             return Err(CompilationError::ExceedJumpLimit);
         }
-        self.chunk.modify(offset, (jump_to >> 8) as u8);
-        self.chunk.modify(offset + 1, jump_to as u8);
+        self.chunk().modify(offset, (jump_to >> 8) as u8);
+        self.chunk().modify(offset + 1, jump_to as u8);
         Ok(())
     }
 
@@ -544,7 +543,7 @@ impl<'a> Parser<'a> {
     }
 
     fn while_statement(&mut self) -> ParseResult {
-        let loop_start = self.chunk.ip_len();
+        let loop_start = self.chunk().ip_len();
         self.match_and_consume(TokenType::LParen)?;
         self.expression()?;
         self.match_and_consume(TokenType::RParen)?;
@@ -560,7 +559,7 @@ impl<'a> Parser<'a> {
 
     fn emit_loop(&mut self, loop_start: usize) -> ParseResult {
         self.emit_byte(OpCode::Loop);
-        let offset = self.chunk.ip_len() - loop_start + 2;
+        let offset = self.chunk().ip_len() - loop_start + 2;
         if offset > u16::MAX as usize {
             return Err(CompilationError::ExceedJumpLimit);
         }
@@ -580,14 +579,18 @@ const LOCAL_SIZE: usize = u8::MAX as usize + 1;
 
 #[derive(Debug)]
 pub struct Compiler {
+    function: *mut LoxFunction,
+    func_type: FuncType,
     local: [Local; LOCAL_SIZE],
     local_cnt: usize,
     scope_depth: usize,
 }
 
 impl Compiler {
-    fn new() -> Compiler {
+    fn new(main_func: *mut LoxFunction) -> Compiler {
         Compiler {
+            function: main_func,
+            func_type: FuncType::Script,
             local: [Local::default(); LOCAL_SIZE],
             local_cnt: 0,
             scope_depth: 0,
@@ -678,11 +681,20 @@ pub enum CompileTimeError {
     Compilation(#[from] CompilationError),
 }
 
-pub fn compile(source: &Bytes) -> Result<Chunk, CompileTimeError> {
-    let mut chunk = Chunk::new();
+pub fn compile(source: &Bytes) -> Result<*const LoxFunction, CompileTimeError> {
     let scanner = Scanner::new(source);
-    let mut compiler = Compiler::new();
-    let mut parser = Parser::new(&mut chunk, scanner, &mut compiler);
+    let main_func = LoxFunction {
+        name: Box::into_raw(Box::new(String::new())) as _,
+        arity: 0,
+        chunk: Chunk::new(),
+        obj: LoxObj {
+            obj_type: LoxObjType::Function,
+            next: std::ptr::null_mut(),
+        },
+    };
+    let main_func_ptr = Box::into_raw(Box::new(main_func));
+    let mut compiler = Compiler::new(main_func_ptr);
+    let mut parser = Parser::new(scanner, &mut compiler);
 
     parser.advance().map_err(CompileTimeError::Tokenization)?;
     while parser.match_and_consume(TokenType::Eof).is_err() {
@@ -691,7 +703,7 @@ pub fn compile(source: &Bytes) -> Result<Chunk, CompileTimeError> {
             .map_err(CompileTimeError::Compilation)?;
     }
 
-    chunk.write_in(OpCode::Return as _, 1);
+    unsafe { (*main_func_ptr).chunk.write_in(OpCode::Return as _, 1) };
 
-    Ok(chunk)
+    Ok(main_func_ptr)
 }

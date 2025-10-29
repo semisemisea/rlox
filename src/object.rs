@@ -3,6 +3,7 @@ use crate::lox_object::lox_string::LoxString;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoxObjType {
     String,
+    Function,
 }
 
 #[derive(Debug)]
@@ -31,6 +32,7 @@ impl PartialEq for LoxObj {
                 };
                 lhs == rhs
             }
+            LoxObjType::Function => todo!(),
         }
     }
 }

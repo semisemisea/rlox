@@ -88,18 +88,6 @@ impl<'byte> Scanner<'byte> {
         }
     }
 
-    pub fn scan_all(&mut self) -> Result<Vec<Token>, TokenError> {
-        let mut tokens = Vec::new();
-        loop {
-            let next_token = self.scan_token()?;
-            if matches!(next_token.token_type, TokenType::Eof) {
-                break;
-            }
-            tokens.push(next_token);
-        }
-        Ok(tokens)
-    }
-
     pub fn scan_token(&mut self) -> Result<Token, TokenError> {
         self.skip_whitespace();
         self.prev = self.curr;
