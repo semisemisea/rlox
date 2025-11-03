@@ -154,13 +154,13 @@ impl VM {
             match op {
                 OpCode::Return => {
                     let result = self.pop();
-
+                    let return_frame_slot = self.current_frame().slots;
                     self.frame_count -= 1;
                     if self.frame_count == 0 {
                         self.pop();
                         break;
                     }
-                    self.stack_top = self.current_frame_mut().slots;
+                    self.stack_top = return_frame_slot;
                     self.push(result);
                 }
                 OpCode::Constant => {
@@ -293,11 +293,17 @@ impl VM {
                 OpCode::SetLocal => {
                     let slot = self.read_u8();
                     // BUG: slot and index is confused
-                    self.stack[slot as usize] = self.peek(0);
+                    // self.stack[slot as usize] = self.peek(0);
+                    unsafe {
+                        self.current_frame()
+                            .slots
+                            .add(slot as _)
+                            .write(self.peek(0))
+                    };
                 }
                 OpCode::GetLocal => {
                     let slot = self.read_u8();
-                    unsafe { self.push(self.current_frame().slots.add(1 + slot as usize).read()) };
+                    unsafe { self.push(self.current_frame().slots.add(slot as usize).read()) };
                     // self.push(self.stack[slot as usize]);
                 }
                 OpCode::JumpIfFalse => {

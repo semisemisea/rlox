@@ -308,7 +308,7 @@ impl<'a> Parser<'a> {
                     !(local.depth != usize::MAX && local.depth < (*self.compiler).scope_depth)
                 })
             {
-                if dbg!(self.scanner.make_str(name)) == dbg!(self.scanner.make_str(local.name)) {
+                if self.scanner.make_str(name) == self.scanner.make_str(local.name) {
                     return Err(CompilationError::LocalVariableRedefine);
                 }
             }
@@ -613,7 +613,7 @@ impl Compiler {
             function: func_ptr,
             func_type,
             local: [Local::default(); LOCAL_SIZE],
-            local_cnt: 0,
+            local_cnt: 1,
             scope_depth: 0,
             enclosing: *ptr,
         }))
