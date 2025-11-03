@@ -1,157 +1,29 @@
 use crate::{
-    comp::op_code::{Chunk, OpCode},
-    lox_object::lox_function::{FuncType, LoxFunction},
+    comp::{
+        op_code::{Chunk, OpCode},
+        parsr_rules::{DEFAULT_RULE, ParseResult, ParseRule, Precedence, rule_map},
+    },
+    gc,
+    lox_object::{
+        lox_function::{FuncType, LoxFunction},
+        lox_string::LoxString,
+    },
     object::{LoxObj, LoxObjType},
     scanner::{Scanner, Token, TokenError, TokenType},
     value::Value,
 };
 use bytes::Bytes;
-use std::{collections::HashMap, sync::OnceLock};
-
-static DEFAULT_RULE: ParseRule = ParseRule {
-    prefix: None,
-    infix: None,
-    precedence: Precedence::None,
-};
-
-fn rule_map() -> &'static HashMap<TokenType, ParseRule> {
-    static MAP: OnceLock<HashMap<TokenType, ParseRule>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut map = HashMap::new();
-        map.insert(
-            TokenType::LParen,
-            ParseRule::new(Some(grouping), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::Minus,
-            ParseRule::new(Some(unary), Some(binary), Precedence::Term),
-        );
-        map.insert(
-            TokenType::Plus,
-            ParseRule::new(None, Some(binary), Precedence::Term),
-        );
-        map.insert(
-            TokenType::Slash,
-            ParseRule::new(None, Some(binary), Precedence::Factor),
-        );
-        map.insert(
-            TokenType::Star,
-            ParseRule::new(None, Some(binary), Precedence::Factor),
-        );
-        map.insert(
-            TokenType::NumberLiteral,
-            ParseRule::new(Some(number), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::False,
-            ParseRule::new(Some(literal), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::True,
-            ParseRule::new(Some(literal), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::Nil,
-            ParseRule::new(Some(literal), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::Negation,
-            ParseRule::new(Some(unary), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::Equal,
-            ParseRule::new(None, Some(binary), Precedence::Equality),
-        );
-        map.insert(
-            TokenType::Inequal,
-            ParseRule::new(None, Some(binary), Precedence::Equality),
-        );
-        map.insert(
-            TokenType::GreaterThan,
-            ParseRule::new(None, Some(binary), Precedence::Comparison),
-        );
-        map.insert(
-            TokenType::GreaterThanOrEqual,
-            ParseRule::new(None, Some(binary), Precedence::Comparison),
-        );
-        map.insert(
-            TokenType::LessThan,
-            ParseRule::new(None, Some(binary), Precedence::Comparison),
-        );
-        map.insert(
-            TokenType::LessThanOrEqual,
-            ParseRule::new(None, Some(binary), Precedence::Comparison),
-        );
-        map.insert(
-            TokenType::StringLiteral,
-            ParseRule::new(Some(string), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::Identifier,
-            ParseRule::new(Some(variable), None, Precedence::None),
-        );
-        map.insert(
-            TokenType::And,
-            ParseRule::new(None, Some(and), Precedence::And),
-        );
-        map.insert(
-            TokenType::Or,
-            ParseRule::new(None, Some(or), Precedence::Or),
-        );
-
-        map
-    })
-}
-
-fn number(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.number(can_assign)
-}
-
-fn binary(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.binary(can_assign)
-}
-
-fn unary(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.unary(can_assign)
-}
-
-fn grouping(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.grouping(can_assign)
-}
-
-fn literal(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.literal(can_assign)
-}
-
-fn string(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.string(can_assign)
-}
-
-fn variable(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.variable(can_assign)
-}
-
-fn and(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.and(can_assign)
-}
-
-fn or(parser: &mut Parser, can_assign: bool) -> ParseResult {
-    parser.or(can_assign)
-}
 
 #[derive(Debug)]
 pub struct Parser<'a> {
     prev: Token,
     curr: Token,
     scanner: Scanner<'a>,
-    compiler: &'a mut Compiler,
+    compiler: *mut Compiler,
 }
 
-type ParseResult = Result<(), CompilationError>;
-type ParseFn = for<'a, 'b> fn(&'b mut Parser<'a>, bool) -> ParseResult;
-
 impl<'a> Parser<'a> {
-    pub fn new(scanner: Scanner<'a>, compiler: &'a mut Compiler) -> Parser<'a> {
+    pub fn new(scanner: Scanner<'a>, compiler: *mut Compiler) -> Parser<'a> {
         Parser {
             prev: Token::placeholder(),
             curr: Token::placeholder(),
@@ -161,7 +33,7 @@ impl<'a> Parser<'a> {
     }
 
     fn chunk(&mut self) -> &mut Chunk {
-        unsafe { &mut (*self.compiler.function).chunk }
+        unsafe { &mut (*(*self.compiler).function).chunk }
     }
 
     // NOTE: Core method to write a byte into a VM bytecode Chunk.
@@ -170,9 +42,14 @@ impl<'a> Parser<'a> {
         self.chunk().write_in(byte.into(), line_no)
     }
 
+    fn emit_return(&mut self) {
+        self.emit_byte(OpCode::Nil);
+        self.emit_byte(OpCode::Return);
+    }
+
     // NOTE: Number Literal branch.
     // Also load a constant number into constants pool;
-    fn number(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn number(&mut self, _can_assign: bool) -> ParseResult {
         let num = self.scanner.make_str(self.prev).parse::<f64>().unwrap();
         let val = Value::new_num(num);
         self.emit_constant(val)
@@ -203,7 +80,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn literal(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn literal(&mut self, _can_assign: bool) -> ParseResult {
         match self.prev.token_type {
             TokenType::False => self.emit_byte(OpCode::False),
             TokenType::True => self.emit_byte(OpCode::True),
@@ -231,13 +108,13 @@ impl<'a> Parser<'a> {
     }
 
     // NOTE: ('inside') Parenthesis branch.
-    fn grouping(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn grouping(&mut self, _can_assign: bool) -> ParseResult {
         self.expression()?;
         self.match_and_consume(TokenType::RParen)
     }
 
     // NOTE: Unary branch.
-    fn unary(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn unary(&mut self, _can_assign: bool) -> ParseResult {
         let token_type = self.prev.token_type;
         self.parse(Precedence::Unary)?;
         match token_type {
@@ -248,7 +125,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn binary(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn binary(&mut self, _can_assign: bool) -> ParseResult {
         let prev_type = self.prev.token_type;
         let rule = self.get_rule_prev();
         self.parse(rule.precedence.next_prece())?;
@@ -275,7 +152,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn string(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn string(&mut self, _can_assign: bool) -> ParseResult {
         let str = self.scanner.make_str(self.prev).to_owned();
         self.emit_constant(Value::new_string(str))?;
         Ok(())
@@ -329,6 +206,8 @@ impl<'a> Parser<'a> {
     fn declaration(&mut self) -> ParseResult {
         if self.match_and_consume(TokenType::Var).is_ok() {
             return self.var_declaration();
+        } else if self.match_and_consume(TokenType::Fun).is_ok() {
+            return self.fun_declaration();
         };
         self.statement()
     }
@@ -345,6 +224,8 @@ impl<'a> Parser<'a> {
             self.if_statement()
         } else if self.match_and_consume(TokenType::While).is_ok() {
             self.while_statement()
+        } else if self.match_and_consume(TokenType::Return).is_ok() {
+            self.return_statement()
         } else {
             self.expression_statement()
         }
@@ -377,65 +258,81 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_variable(&mut self) -> Result<usize, CompilationError> {
-        self.match_and_consume(TokenType::Identifier)?;
-        self.declare_variable()?;
-        if self.compiler.scope_depth > 0 {
-            return Ok(0);
+        unsafe {
+            self.match_and_consume(TokenType::Identifier)?;
+            self.declare_variable()?;
+            if (*self.compiler).scope_depth > 0 {
+                return Ok(0);
+            }
+            let ident = self.scanner.make_str(self.prev).to_owned();
+            let val = Value::new_string(ident);
+            let idx = self.chunk().add_constant(val);
+            Ok(idx)
         }
-        let ident = self.scanner.make_str(self.prev).to_owned();
-        let val = Value::new_string(ident);
-        let idx = self.chunk().add_constant(val);
-        Ok(idx)
+    }
+
+    fn mark_initialized(&mut self) -> bool {
+        unsafe {
+            if (*self.compiler).scope_depth > 0 {
+                (*self.compiler).local[(*self.compiler).local_cnt - 1].depth =
+                    (*self.compiler).scope_depth;
+                true
+            } else {
+                false
+            }
+        }
     }
 
     fn define_variable(&mut self, glob_var_idx: usize) {
-        if self.compiler.scope_depth > 0 {
-            self.compiler.local[self.compiler.local_cnt - 1].depth = self.compiler.scope_depth;
+        if self.mark_initialized() {
             return;
         }
         self.emit_byte(OpCode::DefGlob);
         self.emit_byte(glob_var_idx as u8);
     }
 
-    fn variable(&mut self, can_assign: bool) -> ParseResult {
+    pub fn variable(&mut self, can_assign: bool) -> ParseResult {
         self.named_variable(can_assign)
     }
 
     fn declare_variable(&mut self) -> ParseResult {
-        if self.compiler.scope_depth == 0 {
-            return Ok(());
-        }
-        let name = self.prev;
-        for local in self.compiler.local[..self.compiler.local_cnt]
-            .iter()
-            .rev()
-            .take_while(|local| {
-                !(local.depth != usize::MAX && local.depth < self.compiler.scope_depth)
-            })
-        {
-            if dbg!(self.scanner.make_str(name)) == dbg!(self.scanner.make_str(local.name)) {
-                return Err(CompilationError::LocalVariableRedefine);
+        unsafe {
+            if (*self.compiler).scope_depth == 0 {
+                return Ok(());
             }
+            let name = self.prev;
+            for local in self.compiler.as_ref().unwrap().local[..(*self.compiler).local_cnt]
+                .iter()
+                .rev()
+                .take_while(|local| {
+                    !(local.depth != usize::MAX && local.depth < (*self.compiler).scope_depth)
+                })
+            {
+                if dbg!(self.scanner.make_str(name)) == dbg!(self.scanner.make_str(local.name)) {
+                    return Err(CompilationError::LocalVariableRedefine);
+                }
+            }
+            self.add_local(name)?;
+            // for i in 0..(*self.compiler).local_cnt {
+            //     eprintln!("{:?}", (*self.compiler).local[i]);
+            // }
+            Ok(())
         }
-        self.add_local(name)?;
-        // for i in 0..self.compiler.local_cnt {
-        //     eprintln!("{:?}", self.compiler.local[i]);
-        // }
-        Ok(())
     }
 
     fn add_local(&mut self, name: Token) -> ParseResult {
-        if self.compiler.local_cnt == self.compiler.local.len() {
-            return Err(CompilationError::TooMuchStackVariable);
+        unsafe {
+            if (*self.compiler).local_cnt == (*self.compiler).local.len() {
+                return Err(CompilationError::TooMuchStackVariable);
+            }
+            let local = Local {
+                name,
+                depth: usize::MAX,
+            };
+            (*self.compiler).local[(*self.compiler).local_cnt] = local;
+            (*self.compiler).local_cnt += 1;
+            Ok(())
         }
-        let local = Local {
-            name,
-            // depth: self.compiler.scope_depth,
-            depth: usize::MAX,
-        };
-        self.compiler.local[self.compiler.local_cnt] = local;
-        self.compiler.local_cnt += 1;
-        Ok(())
     }
 
     fn named_variable(&mut self, can_assign: bool) -> ParseResult {
@@ -467,25 +364,31 @@ impl<'a> Parser<'a> {
     }
 
     fn new_scope(&mut self) {
-        self.compiler.scope_depth += 1;
+        unsafe {
+            (*self.compiler).scope_depth += 1;
+        }
     }
 
     fn del_scope(&mut self) {
-        self.compiler.scope_depth -= 1;
-        while self.compiler.local_cnt > 0
-            && self.compiler.local[self.compiler.local_cnt - 1].depth > self.compiler.scope_depth
-        {
-            self.emit_byte(OpCode::Pop);
-            self.compiler.local_cnt -= 1;
+        unsafe {
+            (*self.compiler).scope_depth -= 1;
+            while (*self.compiler).local_cnt > 0
+                && (*self.compiler).local[(*self.compiler).local_cnt - 1].depth
+                    > (*self.compiler).scope_depth
+            {
+                self.emit_byte(OpCode::Pop);
+                (*self.compiler).local_cnt -= 1;
+            }
         }
     }
 
     fn resolve_local(&self, name: Token) -> Result<Option<usize>, CompilationError> {
-        for (idx, local) in self.compiler.local[..self.compiler.local_cnt]
-            .iter()
-            .enumerate()
-            .rev()
-        {
+        for (idx, local) in unsafe {
+            self.compiler.as_ref().unwrap().local[..(*self.compiler).local_cnt]
+                .iter()
+                .enumerate()
+                .rev()
+        } {
             if self.scanner.make_str(local.name) == self.scanner.make_str(name) {
                 if local.depth == usize::MAX {
                     return Err(CompilationError::ReadWhileDefining);
@@ -525,14 +428,14 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn and(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn and(&mut self, _can_assign: bool) -> ParseResult {
         let end_jump = self.emit_jump(OpCode::JumpIfFalse);
         self.emit_jump(OpCode::Pop);
         self.parse(Precedence::And)?;
         self.patch_jump(end_jump)
     }
 
-    fn or(&mut self, _can_assign: bool) -> ParseResult {
+    pub fn or(&mut self, _can_assign: bool) -> ParseResult {
         let else_jump = self.emit_jump(OpCode::JumpIfFalse);
         let end_jump = self.emit_jump(OpCode::Jump);
         self.patch_jump(else_jump)?;
@@ -567,6 +470,85 @@ impl<'a> Parser<'a> {
         self.emit_byte(offset as u8);
         Ok(())
     }
+
+    fn fun_declaration(&mut self) -> ParseResult {
+        let glob_func_idx = self.parse_variable()?;
+        self.mark_initialized();
+        self.function(FuncType::Function)?;
+        self.define_variable(glob_func_idx);
+        Ok(())
+    }
+
+    fn function(&mut self, func_type: FuncType) -> ParseResult {
+        Compiler::update(
+            &mut self.compiler,
+            LoxString::new(self.scanner.make_str(self.prev).to_string()),
+            func_type,
+        );
+        self.new_scope();
+        self.match_and_consume(TokenType::LParen)?;
+        if !self.check(TokenType::RParen) {
+            loop {
+                unsafe {
+                    if (*(*self.compiler).function).arity == 255 {
+                        return Err(CompilationError::ExceedArityLimit);
+                    }
+                    (*(*self.compiler).function).arity += 1;
+                    let const_idx = self.parse_variable()?;
+                    self.define_variable(const_idx);
+                    if self.match_and_consume(TokenType::Comma).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        self.match_and_consume(TokenType::RParen)?;
+        self.match_and_consume(TokenType::LBrace)?;
+        self.block()?;
+        self.emit_return();
+        let obj_function = Compiler::end_compiler(&mut self.compiler);
+        let val = Value::new_function(obj_function);
+        self.emit_constant(val)
+    }
+
+    pub fn call(&mut self, _can_assign: bool) -> ParseResult {
+        let argc = self.argument_list()?;
+        self.emit_byte(OpCode::Call);
+        self.emit_byte(argc);
+        Ok(())
+    }
+
+    fn argument_list(&mut self) -> Result<u8, CompilationError> {
+        let mut arg_count = 0;
+        if !self.check(TokenType::RParen) {
+            loop {
+                self.expression()?;
+                if arg_count == 255 {
+                    return Err(CompilationError::TooMuchArgument);
+                }
+                arg_count += 1;
+                if self.match_and_consume(TokenType::Comma).is_err() {
+                    break;
+                }
+            }
+        }
+        self.match_and_consume(TokenType::RParen)?;
+        Ok(arg_count)
+    }
+
+    fn return_statement(&mut self) -> ParseResult {
+        if matches!(unsafe { &(*self.compiler).func_type }, FuncType::Script) {
+            return Err(CompilationError::ReturnInTopFunction);
+        }
+        if self.match_and_consume(TokenType::Semicolon).is_ok() {
+            self.emit_return();
+        } else {
+            self.expression()?;
+            self.match_and_consume(TokenType::Semicolon)?;
+            self.emit_byte(OpCode::Return);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -584,68 +566,66 @@ pub struct Compiler {
     local: [Local; LOCAL_SIZE],
     local_cnt: usize,
     scope_depth: usize,
+    enclosing: *mut Compiler,
 }
 
 impl Compiler {
-    fn new(main_func: *mut LoxFunction) -> Compiler {
-        Compiler {
-            function: main_func,
-            func_type: FuncType::Script,
+    /// param 'name' must be registered.
+    fn new(name: *const LoxString, func_type: FuncType) -> *mut Compiler {
+        let obj = LoxObj {
+            obj_type: LoxObjType::Function,
+            next: std::ptr::null_mut(),
+        };
+        let func = LoxFunction {
+            name,
+            obj,
+            arity: 0,
+            chunk: Chunk::new(),
+        };
+        let func_ptr = Box::into_raw(Box::new(func));
+
+        gc::register(func_ptr);
+        Box::into_raw(Box::new(Compiler {
+            function: func_ptr,
+            func_type,
+            local: [Local::default(); LOCAL_SIZE],
+            local_cnt: 1,
+            scope_depth: 0,
+            enclosing: std::ptr::null_mut(),
+        }))
+    }
+
+    fn update(ptr: &mut *mut Compiler, name: *const LoxString, func_type: FuncType) {
+        let obj = LoxObj {
+            obj_type: LoxObjType::Function,
+            next: std::ptr::null_mut(),
+        };
+        let func = LoxFunction {
+            name,
+            obj,
+            arity: 0,
+            chunk: Chunk::new(),
+        };
+        let func_ptr = Box::into_raw(Box::new(func));
+
+        gc::register(func_ptr);
+        *ptr = Box::into_raw(Box::new(Compiler {
+            function: func_ptr,
+            func_type,
             local: [Local::default(); LOCAL_SIZE],
             local_cnt: 0,
             scope_depth: 0,
-        }
+            enclosing: *ptr,
+        }))
     }
-}
 
-#[repr(C)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
-pub enum Precedence {
-    #[default]
-    None = 0,
-    Assignment, // =
-    Or,         // or
-    And,        // and
-    Equality,   // ==  !=
-    Comparison, // < > <= >=
-    Term,       // + -
-    Factor,     // * /
-    Unary,      // ! -
-    Call,       // . ()
-    Primary,
-}
-
-impl Precedence {
-    fn next_prece(&self) -> Precedence {
-        match self {
-            Precedence::None => Precedence::Assignment,
-            Precedence::Assignment => Precedence::Or,
-            Precedence::Or => Precedence::And,
-            Precedence::And => Precedence::Equality,
-            Precedence::Equality => Precedence::Comparison,
-            Precedence::Comparison => Precedence::Term,
-            Precedence::Term => Precedence::Factor,
-            Precedence::Factor => Precedence::Unary,
-            Precedence::Unary => Precedence::Call,
-            Precedence::Call => Precedence::Primary,
-            Precedence::Primary => Precedence::Primary,
-        }
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-struct ParseRule {
-    prefix: Option<ParseFn>,
-    infix: Option<ParseFn>,
-    precedence: Precedence,
-}
-
-impl ParseRule {
-    fn new(prefix: Option<ParseFn>, infix: Option<ParseFn>, precedence: Precedence) -> ParseRule {
-        ParseRule {
-            prefix,
-            infix,
-            precedence,
+    fn end_compiler(ptr: &mut *mut Compiler) -> *mut LoxFunction {
+        unsafe {
+            let ret = (**ptr).function;
+            let prev = (**ptr).enclosing;
+            let _ = Box::from_raw(*ptr);
+            *ptr = prev;
+            ret
         }
     }
 }
@@ -671,6 +651,12 @@ pub enum CompilationError {
     ReadWhileDefining,
     #[error("Too much code to jump over...")]
     ExceedJumpLimit,
+    #[error("Can't have more than 255 arguments...")]
+    TooMuchArgument,
+    #[error("You can't return from a top level function...")]
+    ReturnInTopFunction,
+    #[error("Can't have more than 255 parameters.")]
+    ExceedArityLimit,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -683,18 +669,8 @@ pub enum CompileTimeError {
 
 pub fn compile(source: &Bytes) -> Result<*const LoxFunction, CompileTimeError> {
     let scanner = Scanner::new(source);
-    let main_func = LoxFunction {
-        name: Box::into_raw(Box::new(String::new())) as _,
-        arity: 0,
-        chunk: Chunk::new(),
-        obj: LoxObj {
-            obj_type: LoxObjType::Function,
-            next: std::ptr::null_mut(),
-        },
-    };
-    let main_func_ptr = Box::into_raw(Box::new(main_func));
-    let mut compiler = Compiler::new(main_func_ptr);
-    let mut parser = Parser::new(scanner, &mut compiler);
+    let compiler = Compiler::new(LoxString::new(String::from("main")), FuncType::Script);
+    let mut parser = Parser::new(scanner, compiler);
 
     parser.advance().map_err(CompileTimeError::Tokenization)?;
     while parser.match_and_consume(TokenType::Eof).is_err() {
@@ -702,8 +678,8 @@ pub fn compile(source: &Bytes) -> Result<*const LoxFunction, CompileTimeError> {
             .declaration()
             .map_err(CompileTimeError::Compilation)?;
     }
-
-    unsafe { (*main_func_ptr).chunk.write_in(OpCode::Return as _, 1) };
+    parser.emit_return();
+    let main_func_ptr = Compiler::end_compiler(&mut parser.compiler);
 
     Ok(main_func_ptr)
 }

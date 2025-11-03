@@ -1,6 +1,9 @@
 use std::ops::Add;
 
-use crate::object::{LoxObj, LoxObjType};
+use crate::{
+    gc,
+    object::{LoxObj, LoxObjType},
+};
 
 #[inline(always)]
 fn fnv_1a(item: &[u8]) -> u32 {
@@ -16,6 +19,20 @@ pub struct LoxString {
     pub obj: LoxObj,
     pub hash: u32,
     pub chars: String,
+}
+
+impl LoxString {
+    pub fn new(chars: String) -> *const LoxString {
+        let obj = LoxObj {
+            obj_type: LoxObjType::String,
+            next: std::ptr::null_mut(),
+        };
+        let hash = fnv_1a(chars.as_bytes());
+        let result = LoxString { obj, hash, chars };
+        let ptr = Box::into_raw(Box::new(result));
+        gc::register(ptr);
+        ptr
+    }
 }
 
 impl PartialEq for LoxString {

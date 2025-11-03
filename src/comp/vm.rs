@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use num_enum::UnsafeFromPrimitive;
 
 use crate::comp::hash_table::RLoxHashMapKey;
-use crate::comp::op_code::{Chunk, OpCode};
+use crate::comp::op_code::OpCode;
 use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
 use crate::value::{self, Value, ValueType};
@@ -14,7 +14,7 @@ const STACK_MAX: usize = FRAMES_MAX * u8::MAX as usize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
-    #[error("Token should be {should_be:?} but is actually {actual:?}")]
+    #[error("Token should be {should_be:?} but is actually {actual}")]
     TypeError {
         // line: usize,
         should_be: ValueType,
@@ -22,6 +22,12 @@ pub enum RuntimeError {
     },
     #[error("UndefinedVariable {var_name}")]
     UndefinedVariable { var_name: String },
+    #[error("Only functions and classes can be called. Trying to call {0}")]
+    InvalidCall(Value),
+    #[error("Expect arguments count to be {arity} but actually {argc}")]
+    ArityDismatch { arity: u8, argc: u8 },
+    #[error("Stack Overflow.")]
+    StackOverflow,
 }
 
 thread_local! {
@@ -74,13 +80,14 @@ impl VM {
 
     pub fn init_vm(&mut self, main_func: *const LoxFunction) {
         self.reset_stack();
+        let script_val = Value::new_function(main_func.cast_mut());
+        self.push(script_val);
         self.frames[0] = CallFrame {
             func: main_func.cast_mut(),
             ip: unsafe { (*main_func).chunk.code_top_ptr() },
             slots: self.stack.as_mut_ptr(),
         };
-        self.frame_count += 1;
-        // self.ip = self.chunk.code_top_ptr();
+        self.frame_count = 1;
     }
 
     fn read_u8(&mut self) -> u8 {
@@ -106,7 +113,7 @@ impl VM {
     }
 
     fn ip(&mut self) -> &mut *const u8 {
-        &mut self.current_frame().ip
+        &mut self.current_frame_mut().ip
     }
 
     fn ip_move_forward(&mut self, step: usize) {
@@ -119,33 +126,42 @@ impl VM {
         *ip = unsafe { ip.sub(step) };
     }
 
-    fn current_frame(&mut self) -> &mut CallFrame {
+    fn current_frame_mut(&mut self) -> &mut CallFrame {
         &mut self.frames[self.frame_count - 1]
+    }
+
+    fn current_frame(&self) -> &CallFrame {
+        &self.frames[self.frame_count - 1]
     }
 
     fn peek(&self, distance: usize) -> Value {
         unsafe { self.stack_top.sub(1 + distance).read() }
-    }
-
-    fn current_slot(&mut self, offset: usize) -> &mut Value {
-        unsafe { self.current_frame().slots.add(offset).as_mut().unwrap() }
+        // unsafe { self.current_frame().slots.add(distance).read() }
     }
 
     fn read_constant(&mut self) -> Value {
         let idx = self.read_u8() as usize;
-        let chunk = unsafe { &(*self.current_frame().func).chunk };
+        let chunk = unsafe { &(*self.current_frame_mut().func).chunk };
         chunk.constants()[idx]
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
-            let chunk = unsafe { &(*self.current_frame().func).chunk };
+            let chunk = unsafe { &(*self.current_frame_mut().func).chunk };
             #[cfg(debug_assertions)]
             chunk.show_one_op_code(&mut self.ip().clone());
             let op = unsafe { OpCode::unchecked_transmute_from(self.read_u8()) };
             match op {
                 OpCode::Return => {
-                    break;
+                    let result = self.pop();
+
+                    self.frame_count -= 1;
+                    if self.frame_count == 0 {
+                        self.pop();
+                        break;
+                    }
+                    self.stack_top = self.current_frame_mut().slots;
+                    self.push(result);
                 }
                 OpCode::Constant => {
                     let constant = self.read_constant();
@@ -273,13 +289,16 @@ impl VM {
                     };
                     *val = item;
                 }
+                // BUG: Misuse of OpCode
                 OpCode::SetLocal => {
                     let slot = self.read_u8();
-                    self.push(self.stack[slot as usize]);
+                    // BUG: slot and index is confused
+                    self.stack[slot as usize] = self.peek(0);
                 }
                 OpCode::GetLocal => {
                     let slot = self.read_u8();
-                    self.stack[slot as usize] = self.peek(0);
+                    unsafe { self.push(self.current_frame().slots.add(1 + slot as usize).read()) };
+                    // self.push(self.stack[slot as usize]);
                 }
                 OpCode::JumpIfFalse => {
                     let offset = self.read_u16();
@@ -295,8 +314,38 @@ impl VM {
                     let offset = self.read_u16();
                     self.ip_move_backward(offset as usize);
                 }
+                OpCode::Call => {
+                    let argc = self.read_u8();
+                    self.call_func(self.peek(argc as usize), argc)?;
+                }
             }
         }
+        Ok(())
+    }
+
+    fn call_func(&mut self, callee: Value, argc: u8) -> Result<(), RuntimeError> {
+        if callee.is_function() {
+            let func_ptr = callee.as_object() as *mut LoxFunction;
+            return self.call(func_ptr, argc);
+        }
+        Err(RuntimeError::InvalidCall(callee))
+    }
+
+    fn call(&mut self, func: *mut LoxFunction, argc: u8) -> Result<(), RuntimeError> {
+        if argc != unsafe { (*func).arity } {
+            return Err(RuntimeError::ArityDismatch {
+                arity: unsafe { (*func).arity },
+                argc,
+            });
+        }
+        if self.frame_count == FRAMES_MAX {
+            return Err(RuntimeError::StackOverflow);
+        }
+        let frame = &mut self.frames[self.frame_count];
+        frame.func = func;
+        frame.ip = unsafe { (*func).chunk.code_top_ptr() };
+        frame.slots = unsafe { self.stack_top.sub(argc as usize + 1) };
+        self.frame_count += 1;
         Ok(())
     }
 
@@ -320,7 +369,7 @@ impl VM {
     }
 
     pub fn show(&self) {
-        println!("---- Error find. Showing stack.");
+        println!("Find error. Showing stack.");
         println!();
         println!();
         println!();

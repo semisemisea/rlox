@@ -1,5 +1,6 @@
 use crate::comp::vm::VM;
 use crate::compiler::compile;
+use crate::gc::show_all_objects;
 use bytes::Bytes;
 use color_eyre::eyre::Result;
 use std::env;
@@ -50,6 +51,9 @@ fn run_file(file_path: &str) -> Result<()> {
     let mut vm = VM::new();
     vm.init_vm(main_func);
     vm.run().inspect_err(|_| vm.show())?;
+    #[cfg(debug_assertions)]
+    show_all_objects();
+    gc::free_objects();
     Ok(())
 }
 

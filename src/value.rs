@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 
 use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::vm::INTERNED_STRING;
-use crate::gc::{self, OBJ_HEAD_PTR};
+use crate::gc;
 use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
 use crate::object::{LoxObj, LoxObjType};
@@ -139,7 +139,10 @@ impl Value {
     }
 
     fn new_obj(obj_ptr: *const LoxObj) -> Value {
-        gc::register(obj_ptr as _);
+        match unsafe { (*obj_ptr).obj_type } {
+            LoxObjType::String => gc::register(obj_ptr as *mut LoxString),
+            LoxObjType::Function => gc::register(obj_ptr as *mut LoxFunction),
+        }
         Value {
             v_type: ValueType::LoxObject,
             v_fill: Fillings {
@@ -174,7 +177,14 @@ impl Value {
     //     chunk: Chunk,
     //     name: &'a LoxString,
     // }
-    // pub fn new_function<T: Into<LoxString>>(name: T) -> Value {}
+    pub fn new_function(obj_ptr: *mut LoxFunction) -> Value {
+        Value {
+            v_type: ValueType::LoxObject,
+            v_fill: Fillings {
+                obj_ptr: obj_ptr as _,
+            },
+        }
+    }
 
     #[inline(always)]
     pub fn type_of(&self) -> ValueType {
@@ -234,11 +244,6 @@ impl Value {
     pub fn as_obj_string(&self) -> &LoxString {
         debug_assert!(self.is_string());
         unsafe { (self.as_object() as *const LoxString).as_ref().unwrap() }
-    }
-
-    pub fn as_obj_function(&self) -> &LoxFunction {
-        debug_assert!(self.is_function());
-        unsafe { (self.as_object() as *const LoxFunction).as_ref().unwrap() }
     }
 
     pub fn is_falsy(&self) -> bool {

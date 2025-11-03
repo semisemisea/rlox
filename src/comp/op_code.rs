@@ -32,6 +32,7 @@ pub enum OpCode {
     JumpIfFalse,
     Jump,
     Loop,
+    Call,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +89,10 @@ impl Chunk {
     }
 
     pub fn add_constant(&mut self, value: Value) -> usize {
+        // println!("addr:{:p}", self);
+        // println!("___DBG");
+        // self.show_constants();
+        // println!();
         self.constants.push(value);
         self.constants.len() - 1
     }
@@ -164,13 +169,13 @@ impl Chunk {
                 print!("{:<20}", "OP_GET_LOCAL:");
                 unsafe { *ip = ip.add(1) }
                 let idx = unsafe { **ip };
-                print!("{:>4}    {}", idx, self.constants[idx as usize]);
+                print!("{:>4}", idx);
             }
             OpCode::SetLocal => {
                 print!("{:<20}", "OP_SET_LOCAL:");
                 unsafe { *ip = ip.add(1) }
                 let idx = unsafe { **ip };
-                print!("{:>4}    {}", idx, self.constants[idx as usize]);
+                print!("{:>4}", idx);
             }
             OpCode::JumpIfFalse => {
                 print!("{:<20}", "OP_JUMP_IF_FALSE:");
@@ -195,6 +200,12 @@ impl Chunk {
                 unsafe { *ip = ip.add(1) }
                 offset |= unsafe { **ip } as u16;
                 print!("{:>4}", offset);
+            }
+            OpCode::Call => {
+                print!("{:<20}", "OP_CALL:");
+                unsafe { *ip = ip.add(1) }
+                let argc = unsafe { **ip };
+                print!("{:>4}", argc);
             }
         }
         println!();
