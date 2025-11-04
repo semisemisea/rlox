@@ -5,6 +5,7 @@ use crate::{
     },
     gc,
     lox_object::{
+        lox_closure::LoxClosure,
         lox_function::{FuncType, LoxFunction},
         lox_string::LoxString,
     },
@@ -507,7 +508,7 @@ impl<'a> Parser<'a> {
         self.block()?;
         self.emit_return();
         let obj_function = Compiler::end_compiler(&mut self.compiler);
-        let val = Value::new_function(obj_function);
+        let val = Value::new_closure(obj_function);
         self.emit_constant(val)
     }
 
@@ -619,13 +620,13 @@ impl Compiler {
         }))
     }
 
-    fn end_compiler(ptr: &mut *mut Compiler) -> *mut LoxFunction {
+    fn end_compiler(ptr: &mut *mut Compiler) -> *mut LoxClosure {
         unsafe {
             let ret = (**ptr).function;
             let prev = (**ptr).enclosing;
             let _ = Box::from_raw(*ptr);
             *ptr = prev;
-            ret
+            LoxClosure::raw_new(ret)
         }
     }
 }
@@ -667,7 +668,7 @@ pub enum CompileTimeError {
     Compilation(#[from] CompilationError),
 }
 
-pub fn compile(source: &Bytes) -> Result<*const LoxFunction, CompileTimeError> {
+pub fn compile(source: &Bytes) -> Result<*const LoxClosure, CompileTimeError> {
     let scanner = Scanner::new(source);
     let compiler = Compiler::new(LoxString::new(String::from("main")), FuncType::Script);
     let mut parser = Parser::new(scanner, compiler);

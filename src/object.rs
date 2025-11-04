@@ -4,6 +4,8 @@ use crate::lox_object::lox_string::LoxString;
 pub enum LoxObjType {
     String,
     Function,
+    Closure,
+    Native,
 }
 
 #[derive(Debug)]
@@ -32,7 +34,7 @@ impl PartialEq for LoxObj {
                 };
                 lhs == rhs
             }
-            LoxObjType::Function => todo!(),
+            LoxObjType::Native | LoxObjType::Closure | LoxObjType::Function => todo!(),
         }
     }
 }

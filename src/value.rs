@@ -5,6 +5,7 @@ use std::ptr::NonNull;
 use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::vm::INTERNED_STRING;
 use crate::gc;
+use crate::lox_object::lox_closure::LoxClosure;
 use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
 use crate::object::{LoxObj, LoxObjType};
@@ -116,6 +117,16 @@ impl std::fmt::Display for Value {
                         let casted_ptr = obj_ptr as *const LoxFunction;
                         write!(f, "<fn {}>", unsafe { &(*(*casted_ptr).name).chars })
                     }
+                    LoxObjType::Closure => {
+                        let casted_ptr = obj_ptr as *const LoxClosure;
+                        writeln!(f, "closure")?;
+                        write!(f, "<fn {}>", unsafe {
+                            &(*(*(*casted_ptr).func).name).chars
+                        })
+                        // TODO:
+                        // todo!("captured variable")
+                    }
+                    LoxObjType::Native => todo!(),
                 }
             }
         }
@@ -142,6 +153,9 @@ impl Value {
         match unsafe { (*obj_ptr).obj_type } {
             LoxObjType::String => gc::register(obj_ptr as *mut LoxString),
             LoxObjType::Function => gc::register(obj_ptr as *mut LoxFunction),
+            LoxObjType::Closure => {}
+            // LoxObjType::Closure => gc::register(obj_ptr as *mut LoxClosure),
+            LoxObjType::Native => todo!(),
         }
         Value {
             v_type: ValueType::LoxObject,
@@ -177,6 +191,7 @@ impl Value {
     //     chunk: Chunk,
     //     name: &'a LoxString,
     // }
+    // WARNING: Memory Leak?
     pub fn new_function(obj_ptr: *mut LoxFunction) -> Value {
         Value {
             v_type: ValueType::LoxObject,
@@ -184,6 +199,10 @@ impl Value {
                 obj_ptr: obj_ptr as _,
             },
         }
+    }
+
+    pub fn new_closure(closure_raw: *mut LoxClosure) -> Value {
+        Value::new_obj(closure_raw as *const LoxObj)
     }
 
     #[inline(always)]
@@ -211,6 +230,11 @@ impl Value {
         self.type_of() == ValueType::LoxObject
     }
 
+    pub fn obj_type(&self) -> LoxObjType {
+        debug_assert!(self.is_object());
+        unsafe { self.as_object().as_ref() }.unwrap().obj_type
+    }
+
     pub fn is_string(&self) -> bool {
         self.is_object()
             && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::String
@@ -219,6 +243,11 @@ impl Value {
     pub fn is_function(&self) -> bool {
         self.is_object()
             && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::Function
+    }
+
+    pub fn is_closure(&self) -> bool {
+        self.is_object()
+            && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::Closure
     }
 
     pub fn as_bool(&self) -> bool {
@@ -244,6 +273,16 @@ impl Value {
     pub fn as_obj_string(&self) -> &LoxString {
         debug_assert!(self.is_string());
         unsafe { (self.as_object() as *const LoxString).as_ref().unwrap() }
+    }
+
+    pub fn as_closure(&self) -> *mut LoxClosure {
+        debug_assert!(self.is_closure());
+        (self.as_object()) as *mut LoxClosure
+    }
+
+    pub fn as_function(&self) -> *mut LoxFunction {
+        debug_assert!(self.is_function());
+        (self.as_object()) as *mut LoxFunction
     }
 
     pub fn is_falsy(&self) -> bool {

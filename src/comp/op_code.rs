@@ -33,6 +33,7 @@ pub enum OpCode {
     Jump,
     Loop,
     Call,
+    Closure,
 }
 
 #[derive(Debug, Default)]
@@ -206,6 +207,11 @@ impl Chunk {
                 unsafe { *ip = ip.add(1) }
                 let argc = unsafe { **ip };
                 print!("{:>4}", argc);
+            }
+            OpCode::Closure => {
+                print!("{:<20},", "OP_CLOSURE:");
+                let offset = unsafe { **ip };
+                print!("{:>4}", offset);
             }
         }
         println!();

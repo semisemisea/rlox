@@ -46,7 +46,7 @@ fn run_file(file_path: &str) -> Result<()> {
     let main_func = compile(&file_content)?;
     #[cfg(debug_assertions)]
     unsafe {
-        (*main_func).chunk.dbg_print();
+        (*(*main_func).func).chunk.dbg_print();
     }
     let mut vm = VM::new();
     vm.init_vm(main_func);

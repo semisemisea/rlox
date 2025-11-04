@@ -5,8 +5,10 @@ use num_enum::UnsafeFromPrimitive;
 
 use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::op_code::OpCode;
+use crate::lox_object::lox_closure::LoxClosure;
 use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
+use crate::object::LoxObjType;
 use crate::value::{self, Value, ValueType};
 
 const FRAMES_MAX: usize = 64;
@@ -45,7 +47,7 @@ pub struct VM {
 
 #[derive(Debug, Default, Clone, Copy)]
 struct CallFrame {
-    func: *mut LoxFunction,
+    closure: *mut LoxClosure,
     ip: *const u8,
     slots: *mut Value,
 }
@@ -78,13 +80,13 @@ impl VM {
         }
     }
 
-    pub fn init_vm(&mut self, main_func: *const LoxFunction) {
+    pub fn init_vm(&mut self, main_func: *const LoxClosure) {
         self.reset_stack();
-        let script_val = Value::new_function(main_func.cast_mut());
+        let script_val = Value::new_closure(main_func.cast_mut());
         self.push(script_val);
         self.frames[0] = CallFrame {
-            func: main_func.cast_mut(),
-            ip: unsafe { (*main_func).chunk.code_top_ptr() },
+            closure: script_val.as_closure(),
+            ip: unsafe { (*(*main_func).func).chunk.code_top_ptr() },
             slots: self.stack.as_mut_ptr(),
         };
         self.frame_count = 1;
@@ -141,13 +143,13 @@ impl VM {
 
     fn read_constant(&mut self) -> Value {
         let idx = self.read_u8() as usize;
-        let chunk = unsafe { &(*self.current_frame_mut().func).chunk };
+        let chunk = unsafe { &(*(*self.current_frame_mut().closure).func).chunk };
         chunk.constants()[idx]
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
-            let chunk = unsafe { &(*self.current_frame_mut().func).chunk };
+            let chunk = unsafe { &(*(*self.current_frame_mut().closure).func).chunk };
             #[cfg(debug_assertions)]
             chunk.show_one_op_code(&mut self.ip().clone());
             let op = unsafe { OpCode::unchecked_transmute_from(self.read_u8()) };
@@ -289,11 +291,8 @@ impl VM {
                     };
                     *val = item;
                 }
-                // BUG: Misuse of OpCode
                 OpCode::SetLocal => {
                     let slot = self.read_u8();
-                    // BUG: slot and index is confused
-                    // self.stack[slot as usize] = self.peek(0);
                     unsafe {
                         self.current_frame()
                             .slots
@@ -324,20 +323,30 @@ impl VM {
                     let argc = self.read_u8();
                     self.call_func(self.peek(argc as usize), argc)?;
                 }
+                OpCode::Closure => {
+                    let closure_raw = self.read_constant().as_closure();
+                    let closure = Value::new_closure(closure_raw);
+                    self.push(closure);
+                }
             }
         }
         Ok(())
     }
 
     fn call_func(&mut self, callee: Value, argc: u8) -> Result<(), RuntimeError> {
-        if callee.is_function() {
-            let func_ptr = callee.as_object() as *mut LoxFunction;
-            return self.call(func_ptr, argc);
+        match callee.obj_type() {
+            LoxObjType::Closure => {
+                let func_ptr = callee.as_closure();
+                return self.call(func_ptr, argc);
+            }
+            LoxObjType::Native => todo!(),
+            _ => {}
         }
         Err(RuntimeError::InvalidCall(callee))
     }
 
-    fn call(&mut self, func: *mut LoxFunction, argc: u8) -> Result<(), RuntimeError> {
+    fn call(&mut self, closure: *mut LoxClosure, argc: u8) -> Result<(), RuntimeError> {
+        let func = unsafe { (*closure).func };
         if argc != unsafe { (*func).arity } {
             return Err(RuntimeError::ArityDismatch {
                 arity: unsafe { (*func).arity },
@@ -348,7 +357,7 @@ impl VM {
             return Err(RuntimeError::StackOverflow);
         }
         let frame = &mut self.frames[self.frame_count];
-        frame.func = func;
+        frame.closure = closure;
         frame.ip = unsafe { (*func).chunk.code_top_ptr() };
         frame.slots = unsafe { self.stack_top.sub(argc as usize + 1) };
         self.frame_count += 1;

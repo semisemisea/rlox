@@ -1,9 +1,14 @@
-use std::cell::RefCell;
-
 use crate::{
-    lox_object::{SpecifiedObject, lox_function::LoxFunction, lox_string::LoxString},
+    lox_object::{
+        SpecifiedObject, lox_closure::LoxClosure, lox_function::LoxFunction, lox_string::LoxString,
+    },
     object::{LoxObj, LoxObjType},
 };
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    static OBJ_CNT: Cell<usize> = const{Cell::new(0)};
+}
 
 pub fn show_all_objects() {
     println!();
@@ -30,6 +35,16 @@ pub fn show_all_objects() {
                 print!("arity: {}  ", unsafe { &(*func_obj).arity });
                 println!()
             }
+            LoxObjType::Closure => {
+                let closure_obj = p_obj as *mut LoxClosure;
+                print!("Closure Object at {:<12p}:  ", closure_obj);
+                print!("next obj: {:<12p}", unsafe { (*closure_obj).obj.next });
+                println!();
+                // TODO:
+                println!("TODO");
+                // todo!("Function showing and captured variable.");
+            }
+            LoxObjType::Native => todo!(),
         }
         p_obj = unsafe { p_obj.read().next };
     }
@@ -54,15 +69,19 @@ fn free_object(p_obj: *mut LoxObj) {
             let _ = Box::from_raw(p_obj as *mut LoxString);
         },
         LoxObjType::Function => unsafe {
-            let func_obj = p_obj as *mut LoxFunction;
-            let _ = Box::from_raw(func_obj);
+            let _ = Box::from_raw(p_obj as *mut LoxFunction);
         },
+        LoxObjType::Closure => unsafe {
+            let _ = Box::from_raw(p_obj as *mut LoxClosure);
+        },
+        LoxObjType::Native => todo!(),
     }
 }
 
 pub fn register<T: SpecifiedObject>(obj_ptr: *mut T) {
     #[cfg(debug_assertions)]
     println!("Register a object at {:<12p}", obj_ptr);
+    OBJ_CNT.with(|x| x = x + 1)
     OBJ_HEAD_PTR.with_borrow_mut(|vm_obj_ptr_head| {
         let next_obj = unsafe { (*obj_ptr).next() };
         *next_obj = *vm_obj_ptr_head;
