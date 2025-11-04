@@ -59,11 +59,13 @@ pub fn free_objects() {
         free_object(p_obj);
         p_obj = next;
     }
+    debug_assert!(OBJ_CNT.with(|x| x.take() == 0));
 }
 /// NOTE: Object will be boxed again and goes out of the scope and eventually get droped.
 fn free_object(p_obj: *mut LoxObj) {
     #[cfg(debug_assertions)]
     println!("Ready to free object at {:p}", p_obj);
+    OBJ_CNT.with(|x| x.update(|x| x - 1));
     match unsafe { (*p_obj).obj_type } {
         LoxObjType::String => unsafe {
             let _ = Box::from_raw(p_obj as *mut LoxString);
@@ -81,7 +83,7 @@ fn free_object(p_obj: *mut LoxObj) {
 pub fn register<T: SpecifiedObject>(obj_ptr: *mut T) {
     #[cfg(debug_assertions)]
     println!("Register a object at {:<12p}", obj_ptr);
-    OBJ_CNT.with(|x| x = x + 1)
+    OBJ_CNT.with(|x| x.update(|x| x + 1));
     OBJ_HEAD_PTR.with_borrow_mut(|vm_obj_ptr_head| {
         let next_obj = unsafe { (*obj_ptr).next() };
         *next_obj = *vm_obj_ptr_head;

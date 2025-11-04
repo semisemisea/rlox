@@ -1,0 +1,18 @@
+Add LoxClosure type.
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch main
+# Your branch is up to date with 'origin/main'.
+#
+# Changes to be committed:
+#	modified:   src/comp/op_code.rs
+#	modified:   src/comp/vm.rs
+#	modified:   src/compiler.rs
+#	modified:   src/gc.rs
+#	modified:   src/lox_object.rs
+#	new file:   src/lox_object/lox_closure.rs
+#	modified:   src/main.rs
+#	modified:   src/object.rs
+#	modified:   src/value.rs
+#

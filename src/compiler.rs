@@ -586,6 +586,10 @@ impl Compiler {
         let func_ptr = Box::into_raw(Box::new(func));
 
         gc::register(func_ptr);
+        // NOTE:
+        // MEMORY ASSURANCE:
+        // Every Compiler will call end_compiler at the end.
+        // In there they will be boxed again and drop.
         Box::into_raw(Box::new(Compiler {
             function: func_ptr,
             func_type,
