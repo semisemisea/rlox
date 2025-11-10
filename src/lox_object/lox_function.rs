@@ -5,6 +5,7 @@ use crate::{comp::op_code::Chunk, lox_object::lox_string::LoxString, object::Lox
 pub struct LoxFunction {
     pub obj: LoxObj,
     pub arity: u8,
+    pub upvalue_cnt: u8,
     pub chunk: Chunk,
     pub name: *const LoxString,
 }

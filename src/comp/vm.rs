@@ -6,8 +6,8 @@ use num_enum::UnsafeFromPrimitive;
 use crate::comp::hash_table::RLoxHashMapKey;
 use crate::comp::op_code::OpCode;
 use crate::lox_object::lox_closure::LoxClosure;
-use crate::lox_object::lox_function::LoxFunction;
 use crate::lox_object::lox_string::LoxString;
+use crate::lox_object::lox_upvalue::LoxUpvalue;
 use crate::object::LoxObjType;
 use crate::value::{self, Value, ValueType};
 
@@ -22,7 +22,7 @@ pub enum RuntimeError {
         should_be: ValueType,
         actual: Value,
     },
-    #[error("UndefinedVariable {var_name}")]
+    #[error("Undefined variable {var_name}")]
     UndefinedVariable { var_name: String },
     #[error("Only functions and classes can be called. Trying to call {0}")]
     InvalidCall(Value),
@@ -327,6 +327,47 @@ impl VM {
                     let closure_raw = self.read_constant().as_closure();
                     let closure = Value::new_closure(closure_raw);
                     self.push(closure);
+                    for i in 0..unsafe { (*(*closure_raw).func).upvalue_cnt as usize } {
+                        let is_local = self.read_u8() == 1;
+                        let index = self.read_u8() as usize;
+                        unsafe {
+                            closure.as_closure().as_mut().unwrap().upvalues[i] = if is_local {
+                                LoxUpvalue::raw_new(self.current_frame().slots.add(index))
+                            } else {
+                                // eprintln!(
+                                //     "function names: {}",
+                                //     self.current_frame()
+                                //         .closure
+                                //         .as_ref()
+                                //         .unwrap()
+                                //         .func
+                                //         .as_ref()
+                                //         .unwrap()
+                                //         .name
+                                //         .as_ref()
+                                //         .unwrap()
+                                //         .chars
+                                // );
+                                self.current_frame().closure.as_ref().unwrap().upvalues[index]
+                            }
+                        }
+                    }
+                }
+                OpCode::GetUpvalue => {
+                    let slot = self.read_u8() as usize;
+                    unsafe {
+                        let item = *(*self.current_frame().closure.as_ref().unwrap().upvalues
+                            [slot])
+                            .location;
+                        self.push(item)
+                    }
+                }
+                OpCode::SetUpvalue => {
+                    let slot = self.read_u8() as usize;
+                    unsafe {
+                        *(*self.current_frame_mut().closure.as_mut().unwrap().upvalues[slot])
+                            .location = self.peek(0);
+                    }
                 }
             }
         }

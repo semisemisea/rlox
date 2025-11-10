@@ -34,6 +34,9 @@ pub enum OpCode {
     Loop,
     Call,
     Closure,
+    GetUpvalue,
+    SetUpvalue,
+    CloseUpvalue,
 }
 
 #[derive(Debug, Default)]
@@ -113,6 +116,12 @@ impl Chunk {
     }
 
     pub fn show_one_op_code(&self, ip: &mut *const u8) {
+        let p_start = self.code_top_ptr();
+        let mut ip_offset = unsafe { ip.offset_from(p_start) } as usize;
+        print!("{:04}  ", ip_offset);
+
+        let line_no = self.get_line(ip_offset);
+        print!("{:>4}  ", line_no);
         let op = unsafe { **ip };
         match unsafe { OpCode::unchecked_transmute_from(op) } {
             OpCode::Return => {
@@ -196,10 +205,10 @@ impl Chunk {
             }
             OpCode::Loop => {
                 print!("{:<20}", "OP_LOOP:");
-                unsafe { *ip = ip.add(1) }
                 let mut offset = (unsafe { **ip } as u16) << 8;
                 unsafe { *ip = ip.add(1) }
                 offset |= unsafe { **ip } as u16;
+                unsafe { *ip = ip.add(1) }
                 print!("{:>4}", offset);
             }
             OpCode::Call => {
@@ -209,9 +218,38 @@ impl Chunk {
                 print!("{:>4}", argc);
             }
             OpCode::Closure => {
-                print!("{:<20},", "OP_CLOSURE:");
-                let offset = unsafe { **ip };
-                print!("{:>4}", offset);
+                print!("{:<20}", "OP_CLOSURE:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                let closure_raw = self.constants[idx as usize].as_closure();
+                print!("{:>4} <fn {}>", idx, unsafe {
+                    &(*(*(*(*closure_raw).func).name).chars)
+                });
+                println!();
+                for _ in 0..unsafe { (*(*closure_raw).func).upvalue_cnt } {
+                    unsafe { *ip = ip.add(1) };
+                    let locality = if unsafe { **ip } != 0 {
+                        "local"
+                    } else {
+                        "upvalue"
+                    };
+                    unsafe { *ip = ip.add(1) };
+                    let idx = unsafe { **ip };
+                    ip_offset += 2;
+                    println!("{:0>4} {:<5}  {:<8} {}", ip_offset, "", locality, idx);
+                }
+            }
+            OpCode::GetUpvalue => {
+                print!("{:<20}", "OP_GET_UPVALUE:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}", idx);
+            }
+            OpCode::SetUpvalue => {
+                print!("{:<20}", "OP_SET_UPVALUE:");
+                unsafe { *ip = ip.add(1) }
+                let idx = unsafe { **ip };
+                print!("{:>4}", idx);
             }
         }
         println!();
@@ -224,11 +262,6 @@ impl Chunk {
         let p_end = unsafe { ip.add(self.code.len()) };
         // while let Some((offset, &op)) = it.next() {
         while ip < p_end {
-            let offset = unsafe { ip.offset_from(p_start) } as usize;
-            print!("{:04}  ", offset);
-
-            let line_no = self.get_line(offset);
-            print!("{:>4}  ", line_no);
             self.show_one_op_code(&mut ip);
         }
     }

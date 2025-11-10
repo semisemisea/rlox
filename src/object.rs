@@ -5,6 +5,7 @@ pub enum LoxObjType {
     String,
     Function,
     Closure,
+    Upvalue,
     Native,
 }
 
@@ -34,7 +35,10 @@ impl PartialEq for LoxObj {
                 };
                 lhs == rhs
             }
-            LoxObjType::Native | LoxObjType::Closure | LoxObjType::Function => todo!(),
+            LoxObjType::Upvalue
+            | LoxObjType::Native
+            | LoxObjType::Closure
+            | LoxObjType::Function => todo!(),
         }
     }
 }

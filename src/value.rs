@@ -127,6 +127,7 @@ impl std::fmt::Display for Value {
                         // todo!("captured variable")
                     }
                     LoxObjType::Native => todo!(),
+                    LoxObjType::Upvalue => todo!(),
                 }
             }
         }
@@ -153,7 +154,10 @@ impl Value {
         match unsafe { (*obj_ptr).obj_type } {
             LoxObjType::String => gc::register(obj_ptr as *mut LoxString),
             LoxObjType::Function => gc::register(obj_ptr as *mut LoxFunction),
+            // Already registerd.
             LoxObjType::Closure => {}
+            // Already registerd.
+            LoxObjType::Upvalue => {}
             // LoxObjType::Closure => gc::register(obj_ptr as *mut LoxClosure),
             LoxObjType::Native => todo!(),
         }

@@ -1,6 +1,6 @@
 use crate::{
     gc,
-    lox_object::lox_function::LoxFunction,
+    lox_object::{lox_function::LoxFunction, lox_upvalue::LoxUpvalue},
     object::{LoxObj, LoxObjType},
 };
 
@@ -9,6 +9,7 @@ use crate::{
 pub struct LoxClosure {
     pub obj: LoxObj,
     pub func: *mut LoxFunction,
+    pub upvalues: Vec<*const LoxUpvalue>,
 }
 
 impl LoxClosure {
@@ -17,7 +18,11 @@ impl LoxClosure {
             obj_type: LoxObjType::Closure,
             next: std::ptr::null_mut(),
         };
-        let closure = LoxClosure { obj, func };
+        let closure = LoxClosure {
+            obj,
+            func,
+            upvalues: vec![std::ptr::null(); unsafe { (*func).upvalue_cnt as usize }],
+        };
         let closure_ptr = Box::into_raw(Box::new(closure));
         gc::register(closure_ptr);
         closure_ptr

@@ -13,3 +13,6 @@ thiserror = "2.0.17"
 
 [profile.dev.package.backtrace]
 opt-level = 3
+
+[profile.release]
+opt-level = 2

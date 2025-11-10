@@ -1,6 +1,7 @@
 use crate::{
     lox_object::{
         SpecifiedObject, lox_closure::LoxClosure, lox_function::LoxFunction, lox_string::LoxString,
+        lox_upvalue::LoxUpvalue,
     },
     object::{LoxObj, LoxObjType},
 };
@@ -45,6 +46,14 @@ pub fn show_all_objects() {
                 // todo!("Function showing and captured variable.");
             }
             LoxObjType::Native => todo!(),
+            LoxObjType::Upvalue => {
+                let upvalue_obj = p_obj as *mut LoxUpvalue;
+                print!("Upvalue Object at {:<12p}:  ", upvalue_obj);
+                print!("next obj: {:<12p}", unsafe { (*upvalue_obj).obj.next });
+                println!();
+                // TODO:
+                println!("TODO");
+            }
         }
         p_obj = unsafe { p_obj.read().next };
     }
@@ -77,6 +86,9 @@ fn free_object(p_obj: *mut LoxObj) {
             let _ = Box::from_raw(p_obj as *mut LoxClosure);
         },
         LoxObjType::Native => todo!(),
+        LoxObjType::Upvalue => unsafe {
+            let _ = Box::from_raw(p_obj as *mut LoxUpvalue);
+        },
     }
 }
 

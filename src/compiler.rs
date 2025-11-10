@@ -275,7 +275,7 @@ impl<'a> Parser<'a> {
     fn mark_initialized(&mut self) -> bool {
         unsafe {
             if (*self.compiler).scope_depth > 0 {
-                (*self.compiler).local[(*self.compiler).local_cnt - 1].depth =
+                (*self.compiler).locals[(*self.compiler).local_cnt - 1].depth =
                     (*self.compiler).scope_depth;
                 true
             } else {
@@ -302,7 +302,7 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             let name = self.prev;
-            for local in self.compiler.as_ref().unwrap().local[..(*self.compiler).local_cnt]
+            for local in self.compiler.as_ref().unwrap().locals[..(*self.compiler).local_cnt]
                 .iter()
                 .rev()
                 .take_while(|local| {
@@ -323,14 +323,15 @@ impl<'a> Parser<'a> {
 
     fn add_local(&mut self, name: Token) -> ParseResult {
         unsafe {
-            if (*self.compiler).local_cnt == (*self.compiler).local.len() {
+            if (*self.compiler).local_cnt == (*self.compiler).locals.len() {
                 return Err(CompilationError::TooMuchStackVariable);
             }
             let local = Local {
                 name,
                 depth: usize::MAX,
+                is_captured: false,
             };
-            (*self.compiler).local[(*self.compiler).local_cnt] = local;
+            (*self.compiler).locals[(*self.compiler).local_cnt] = local;
             (*self.compiler).local_cnt += 1;
             Ok(())
         }
@@ -339,13 +340,16 @@ impl<'a> Parser<'a> {
     fn named_variable(&mut self, can_assign: bool) -> ParseResult {
         let ident = self.scanner.make_str(self.prev).to_owned();
         let val = Value::new_string(ident);
-        let (get_op, set_op, idx) = match self.resolve_local(self.prev)? {
+        let (get_op, set_op, idx) = match self.resolve_local(self.compiler, self.prev)? {
             Some(idx) => (OpCode::GetLocal, OpCode::SetLocal, idx),
-            None => (
-                OpCode::GetGlob,
-                OpCode::SetGlob,
-                self.chunk().add_constant(val),
-            ),
+            None => match self.resolve_upvalue(self.compiler, self.prev)? {
+                Some(idx) => (OpCode::GetUpvalue, OpCode::SetUpvalue, idx),
+                None => (
+                    OpCode::GetGlob,
+                    OpCode::SetGlob,
+                    self.chunk().add_constant(val),
+                ),
+            },
         };
         if can_assign && self.match_and_consume(TokenType::Assign).is_ok() {
             self.expression()?;
@@ -374,18 +378,26 @@ impl<'a> Parser<'a> {
         unsafe {
             (*self.compiler).scope_depth -= 1;
             while (*self.compiler).local_cnt > 0
-                && (*self.compiler).local[(*self.compiler).local_cnt - 1].depth
+                && (*self.compiler).locals[(*self.compiler).local_cnt - 1].depth
                     > (*self.compiler).scope_depth
             {
-                self.emit_byte(OpCode::Pop);
+                if (*self.compiler).locals[(*self.compiler).local_cnt - 1].is_captured {
+                    self.emit_byte(OpCode::);
+                }else{
+                    self.emit_byte(OpCode::Pop);
+                }
                 (*self.compiler).local_cnt -= 1;
             }
         }
     }
 
-    fn resolve_local(&self, name: Token) -> Result<Option<usize>, CompilationError> {
+    fn resolve_local(
+        &self,
+        compiler: *mut Compiler,
+        name: Token,
+    ) -> Result<Option<usize>, CompilationError> {
         for (idx, local) in unsafe {
-            self.compiler.as_ref().unwrap().local[..(*self.compiler).local_cnt]
+            compiler.as_ref().unwrap().locals[..(*compiler).local_cnt]
                 .iter()
                 .enumerate()
                 .rev()
@@ -507,9 +519,21 @@ impl<'a> Parser<'a> {
         self.match_and_consume(TokenType::LBrace)?;
         self.block()?;
         self.emit_return();
-        let obj_function = Compiler::end_compiler(&mut self.compiler);
+        let (obj_function, upvalues) = Compiler::end_compiler(&mut self.compiler);
         let val = Value::new_closure(obj_function);
-        self.emit_constant(val)
+        self.emit_byte(OpCode::Closure);
+        let idx = self.chunk().add_constant(val);
+        if idx > u8::MAX as usize {
+            return Err(CompilationError::TooMuchConstants);
+        }
+        self.emit_byte(idx as u8);
+        unsafe {
+            for upvalue in upvalues[..(*(*obj_function).func).upvalue_cnt as usize].iter() {
+                self.emit_byte(upvalue.is_local as u8);
+                self.emit_byte(upvalue.index as u8);
+            }
+        }
+        Ok(())
     }
 
     pub fn call(&mut self, _can_assign: bool) -> ParseResult {
@@ -550,12 +574,61 @@ impl<'a> Parser<'a> {
         }
         Ok(())
     }
+
+    fn resolve_upvalue(
+        &mut self,
+        compiler: *mut Compiler,
+        name: Token,
+    ) -> Result<Option<usize>, CompilationError> {
+        unsafe {
+            let enclosing = (*compiler).enclosing;
+            if enclosing.is_null() {
+                return Ok(None);
+            }
+            if let Some(idx) = self.resolve_local(enclosing, name)? {
+                (*(*compiler).enclosing).locals[idx].is_captured = true;
+                return Ok(Some(self.add_upvalue(self.compiler, idx, true)?));
+            };
+            if let Some(idx) = self.resolve_upvalue((*compiler).enclosing, name)? {
+                return Ok(Some(self.add_upvalue(compiler, idx, false)?));
+            };
+            Ok(None)
+        }
+    }
+
+    fn add_upvalue(
+        &self,
+        compiler: *mut Compiler,
+        idx: usize,
+        is_local: bool,
+    ) -> Result<usize, CompilationError> {
+        unsafe {
+            let upvalue_cnt = (*(*compiler).function).upvalue_cnt as usize;
+            for (i, upvalue) in compiler.as_ref().unwrap().upvalues[..upvalue_cnt]
+                .iter()
+                .enumerate()
+            {
+                if upvalue.index == idx && upvalue.is_local == is_local {
+                    return Ok(i);
+                }
+            }
+            if upvalue_cnt == u8::MAX as usize {
+                return Err(CompilationError::TooMuchCapturedVariable);
+            }
+            (*compiler).upvalues[upvalue_cnt].is_local = is_local;
+            (*compiler).upvalues[upvalue_cnt].index = idx;
+            let ret = (*(*compiler).function).upvalue_cnt;
+            (*(*compiler).function).upvalue_cnt += 1;
+            Ok(ret as _)
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 struct Local {
-    name: Token,
-    depth: usize,
+    pub name: Token,
+    pub depth: usize,
+    pub is_captured: bool,
 }
 
 const LOCAL_SIZE: usize = u8::MAX as usize + 1;
@@ -564,10 +637,17 @@ const LOCAL_SIZE: usize = u8::MAX as usize + 1;
 pub struct Compiler {
     function: *mut LoxFunction,
     func_type: FuncType,
-    local: [Local; LOCAL_SIZE],
+    locals: [Local; LOCAL_SIZE],
     local_cnt: usize,
+    upvalues: [Upvalue; u8::MAX as usize],
     scope_depth: usize,
     enclosing: *mut Compiler,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct Upvalue {
+    index: usize,
+    is_local: bool,
 }
 
 impl Compiler {
@@ -581,6 +661,7 @@ impl Compiler {
             name,
             obj,
             arity: 0,
+            upvalue_cnt: 0,
             chunk: Chunk::new(),
         };
         let func_ptr = Box::into_raw(Box::new(func));
@@ -590,14 +671,16 @@ impl Compiler {
         // MEMORY ASSURANCE:
         // Every Compiler will call end_compiler at the end.
         // In there they will be boxed again and drop.
-        Box::into_raw(Box::new(Compiler {
+        let compiler = Compiler {
             function: func_ptr,
             func_type,
-            local: [Local::default(); LOCAL_SIZE],
+            locals: [Local::default(); LOCAL_SIZE],
             local_cnt: 1,
+            upvalues: [Upvalue::default(); u8::MAX as usize],
             scope_depth: 0,
             enclosing: std::ptr::null_mut(),
-        }))
+        };
+        Box::into_raw(Box::new(compiler))
     }
 
     fn update(ptr: &mut *mut Compiler, name: *const LoxString, func_type: FuncType) {
@@ -609,28 +692,31 @@ impl Compiler {
             name,
             obj,
             arity: 0,
+            upvalue_cnt: 0,
             chunk: Chunk::new(),
         };
         let func_ptr = Box::into_raw(Box::new(func));
-
         gc::register(func_ptr);
+
         *ptr = Box::into_raw(Box::new(Compiler {
             function: func_ptr,
             func_type,
-            local: [Local::default(); LOCAL_SIZE],
+            locals: [Local::default(); LOCAL_SIZE],
             local_cnt: 1,
+            upvalues: [Upvalue::default(); u8::MAX as usize],
             scope_depth: 0,
             enclosing: *ptr,
         }))
     }
 
-    fn end_compiler(ptr: &mut *mut Compiler) -> *mut LoxClosure {
+    fn end_compiler(ptr: &mut *mut Compiler) -> (*mut LoxClosure, [Upvalue; u8::MAX as usize]) {
         unsafe {
             let ret = (**ptr).function;
             let prev = (**ptr).enclosing;
+            let upvalues = (**ptr).upvalues;
             let _ = Box::from_raw(*ptr);
             *ptr = prev;
-            LoxClosure::raw_new(ret)
+            (LoxClosure::raw_new(ret), upvalues)
         }
     }
 }
@@ -662,6 +748,8 @@ pub enum CompilationError {
     ReturnInTopFunction,
     #[error("Can't have more than 255 parameters.")]
     ExceedArityLimit,
+    #[error("Can't have more than 255 captured variable in a closure")]
+    TooMuchCapturedVariable,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -684,7 +772,7 @@ pub fn compile(source: &Bytes) -> Result<*const LoxClosure, CompileTimeError> {
             .map_err(CompileTimeError::Compilation)?;
     }
     parser.emit_return();
-    let main_func_ptr = Compiler::end_compiler(&mut parser.compiler);
+    let (main_func_ptr, _) = Compiler::end_compiler(&mut parser.compiler);
 
     Ok(main_func_ptr)
 }

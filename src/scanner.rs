@@ -207,7 +207,7 @@ impl Token {
 
     pub fn placeholder() -> Token {
         Token {
-            token_type: TokenType::Eof,
+            token_type: TokenType::Placeholder,
             val: (0, 0),
             line: 0,
         }
@@ -263,7 +263,7 @@ pub enum TokenType {
     Var,
     While,
     // Placeholder
-    // Placeholder,
+    Placeholder,
 }
 
 fn keyword_match() -> &'static HashMap<Bytes, TokenType> {
