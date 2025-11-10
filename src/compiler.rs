@@ -382,8 +382,8 @@ impl<'a> Parser<'a> {
                     > (*self.compiler).scope_depth
             {
                 if (*self.compiler).locals[(*self.compiler).local_cnt - 1].is_captured {
-                    self.emit_byte(OpCode::);
-                }else{
+                    self.emit_byte(OpCode::CloseUpvalue);
+                } else {
                     self.emit_byte(OpCode::Pop);
                 }
                 (*self.compiler).local_cnt -= 1;

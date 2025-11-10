@@ -6,6 +6,8 @@ pub enum LoxObjType {
     Function,
     Closure,
     Upvalue,
+    // temporary unused
+    #[allow(unused)]
     Native,
 }
 

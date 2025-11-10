@@ -43,6 +43,7 @@ pub struct VM {
     stack: [Value; STACK_MAX],
     stack_top: *mut Value,
     globals: HashMap<RLoxHashMapKey, Value>,
+    open_upvalues: *mut LoxUpvalue,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -77,6 +78,7 @@ impl VM {
             stack: [Value::default(); STACK_MAX],
             stack_top: std::ptr::null_mut(),
             globals: HashMap::new(),
+            open_upvalues: std::ptr::null_mut(),
         }
     }
 
@@ -157,6 +159,7 @@ impl VM {
                 OpCode::Return => {
                     let result = self.pop();
                     let return_frame_slot = self.current_frame().slots;
+                    self.close_upvalue(self.current_frame().slots);
                     self.frame_count -= 1;
                     if self.frame_count == 0 {
                         self.pop();
@@ -332,22 +335,9 @@ impl VM {
                         let index = self.read_u8() as usize;
                         unsafe {
                             closure.as_closure().as_mut().unwrap().upvalues[i] = if is_local {
-                                LoxUpvalue::raw_new(self.current_frame().slots.add(index))
+                                self.capture_upvalue(index)
+                                // LoxUpvalue::raw_new(self.current_frame().slots.add(index))
                             } else {
-                                // eprintln!(
-                                //     "function names: {}",
-                                //     self.current_frame()
-                                //         .closure
-                                //         .as_ref()
-                                //         .unwrap()
-                                //         .func
-                                //         .as_ref()
-                                //         .unwrap()
-                                //         .name
-                                //         .as_ref()
-                                //         .unwrap()
-                                //         .chars
-                                // );
                                 self.current_frame().closure.as_ref().unwrap().upvalues[index]
                             }
                         }
@@ -369,9 +359,47 @@ impl VM {
                             .location = self.peek(0);
                     }
                 }
+                OpCode::CloseUpvalue => {
+                    self.close_upvalue(unsafe { self.stack_top.sub(1) });
+                    self.pop();
+                }
             }
         }
         Ok(())
+    }
+
+    fn close_upvalue(&mut self, last: *mut Value) {
+        unsafe {
+            while !self.open_upvalues.is_null() && (*self.open_upvalues).location >= last {
+                let upvalue = self.open_upvalues;
+                (*upvalue).closed = *(*upvalue).location;
+                (*upvalue).location = &mut (*upvalue).closed;
+                self.open_upvalues = (*upvalue).next;
+            }
+        }
+    }
+
+    fn capture_upvalue(&mut self, index: usize) -> *mut LoxUpvalue {
+        unsafe {
+            let local = self.current_frame().slots.add(index);
+            let mut prev_upvalue = std::ptr::null_mut();
+            let mut upvalue = self.open_upvalues;
+            while !upvalue.is_null() && (*upvalue).location > local {
+                prev_upvalue = upvalue;
+                upvalue = (*upvalue).next;
+            }
+            if !upvalue.is_null() && (*upvalue).location == local {
+                return upvalue;
+            }
+            let created_upvalue = LoxUpvalue::raw_new(local);
+            (*created_upvalue).next = upvalue;
+            if prev_upvalue.is_null() {
+                self.open_upvalues = created_upvalue;
+            } else {
+                (*prev_upvalue).next = created_upvalue;
+            }
+            created_upvalue
+        }
     }
 
     fn call_func(&mut self, callee: Value, argc: u8) -> Result<(), RuntimeError> {

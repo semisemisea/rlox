@@ -150,6 +150,10 @@ impl Value {
         if boolean { TRUE } else { FALSE }
     }
 
+    pub fn new_nil() -> Value {
+        NIL
+    }
+
     fn new_obj(obj_ptr: *const LoxObj) -> Value {
         match unsafe { (*obj_ptr).obj_type } {
             LoxObjType::String => gc::register(obj_ptr as *mut LoxString),
@@ -196,14 +200,14 @@ impl Value {
     //     name: &'a LoxString,
     // }
     // WARNING: Memory Leak?
-    pub fn new_function(obj_ptr: *mut LoxFunction) -> Value {
-        Value {
-            v_type: ValueType::LoxObject,
-            v_fill: Fillings {
-                obj_ptr: obj_ptr as _,
-            },
-        }
-    }
+    // pub fn new_function(obj_ptr: *mut LoxFunction) -> Value {
+    //     Value {
+    //         v_type: ValueType::LoxObject,
+    //         v_fill: Fillings {
+    //             obj_ptr: obj_ptr as _,
+    //         },
+    //     }
+    // }
 
     pub fn new_closure(closure_raw: *mut LoxClosure) -> Value {
         Value::new_obj(closure_raw as *const LoxObj)
@@ -244,10 +248,10 @@ impl Value {
             && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::String
     }
 
-    pub fn is_function(&self) -> bool {
-        self.is_object()
-            && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::Function
-    }
+    // pub fn is_function(&self) -> bool {
+    //     self.is_object()
+    //         && unsafe { self.as_object().as_ref() }.unwrap().obj_type == LoxObjType::Function
+    // }
 
     pub fn is_closure(&self) -> bool {
         self.is_object()
@@ -284,10 +288,10 @@ impl Value {
         (self.as_object()) as *mut LoxClosure
     }
 
-    pub fn as_function(&self) -> *mut LoxFunction {
-        debug_assert!(self.is_function());
-        (self.as_object()) as *mut LoxFunction
-    }
+    // pub fn as_function(&self) -> *mut LoxFunction {
+    //     debug_assert!(self.is_function());
+    //     (self.as_object()) as *mut LoxFunction
+    // }
 
     pub fn is_falsy(&self) -> bool {
         self.is_nil() || (self.is_bool() && !self.as_bool())

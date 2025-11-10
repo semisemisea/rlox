@@ -251,6 +251,9 @@ impl Chunk {
                 let idx = unsafe { **ip };
                 print!("{:>4}", idx);
             }
+            OpCode::CloseUpvalue => {
+                print!("{:<20}", "OP_CLOSE_UPVALUE:");
+            }
         }
         println!();
         unsafe { *ip = ip.add(1) }
